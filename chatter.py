@@ -1,0 +1,229 @@
+"""
+PFC - Chatter 主类
+
+从 MaiM-with-u 0.6.3-fix4 移植的 PFC 私聊系统核心
+
+核心设计：
+- 目标驱动的对话管理
+- 多种行动类型（回复、等待、倾听、获取知识等）
+- 回复质量检查
+"""
+
+import asyncio
+import datetime
+import time
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from src.chat.planner_actions.action_manager import ChatterActionManager
+from src.common.data_models.message_manager_data_model import StreamContext
+from src.common.logger import get_logger
+from src.plugin_system.base.base_chatter import BaseChatter
+from src.plugin_system.base.component_types import ChatType
+
+from .config import get_config
+from .models import ConversationState
+from .session import PFCSession, get_session_manager
+
+if TYPE_CHECKING:
+    pass
+
+logger = get_logger("pfc_chatter")
+
+
+class PrefrontalCortexChatter(BaseChatter):
+    """
+    Prefrontal Cortex Chatter - 目标驱动的私聊聊天器
+
+    从 MaiM-with-u 0.6.3-fix4 移植
+
+    核心特性：
+    - 目标驱动的对话管理
+    - 多种行动类型
+    - 回复质量检查
+    - 主动思考能力
+    """
+
+    chatter_name: str = "PrefrontalCortexChatter"
+    chatter_description: str = "目标驱动的私聊聊天器 - 从 MaiM-with-u 移植"
+    chat_types: ClassVar[list[ChatType]] = [ChatType.PRIVATE]
+
+    def __init__(
+        self,
+        stream_id: str,
+        action_manager: "ChatterActionManager",
+        plugin_config: dict | None = None,
+    ):
+        super().__init__(stream_id, action_manager, plugin_config)
+
+        # 核心组件
+        self.session_manager = get_session_manager()
+
+        # 加载配置
+        self._config = get_config()
+
+        # 并发控制
+        self._lock = asyncio.Lock()
+        self._processing = False
+
+        # 统计
+        self._stats: dict[str, Any] = {
+            "messages_processed": 0,
+            "successful_responses": 0,
+            "failed_responses": 0,
+        }
+
+        logger.info(f"[PFC] 初始化完成: stream_id={stream_id}")
+
+    async def execute(self, context: StreamContext) -> dict:
+        """
+        执行聊天处理 - 复刻原版PFC的持续循环行为
+
+        流程：
+        1. 获取 Session
+        2. 获取未读消息
+        3. 记录用户消息
+        4. 启动或唤醒会话循环（持续运行的后台任务）
+        """
+        async with self._lock:
+            self._processing = True
+
+            try:
+                # 1. 获取未读消息
+                unread_messages = context.get_unread_messages()
+                if not unread_messages:
+                    return self._build_result(success=True, message="no_unread_messages")
+
+                # 2. 取最后一条消息作为主消息
+                target_message = unread_messages[-1]
+                user_info = target_message.user_info
+
+                if not user_info:
+                    return self._build_result(success=False, message="no_user_info")
+
+                user_id = str(user_info.user_id)
+                user_name = user_info.user_nickname or user_id
+
+                # 3. 获取或创建 Session
+                session = await self.session_manager.get_session(user_id, self.stream_id)
+
+                # 立即更新活动时间
+                session.update_activity()
+
+                # 4. 检查是否在忽略期
+                if session.ignore_until_timestamp and time.time() < session.ignore_until_timestamp:
+                    logger.info(f"[PFC] 用户 {user_id} 在忽略期内，跳过处理")
+                    return self._build_result(success=True, message="ignored")
+
+                # 5. 结束等待状态（如果有新消息）
+                if session.state == ConversationState.WAITING:
+                    session.end_waiting()
+                    await self.session_manager.save_session(user_id)
+
+                # 6. 记录用户消息
+                for msg in unread_messages:
+                    msg_content = msg.processed_plain_text or msg.display_message or ""
+                    msg_user_name = msg.user_info.user_nickname if msg.user_info else user_name
+                    msg_user_id = str(msg.user_info.user_id) if msg.user_info else user_id
+
+                    session.add_user_message(
+                        content=msg_content,
+                        user_name=msg_user_name,
+                        user_id=msg_user_id,
+                        timestamp=msg.time,
+                    )
+
+                # 7. 构建聊天历史字符串
+                await self._build_chat_history_str(session, user_name)
+
+                # 8. 启动或获取会话循环（复刻原版PFC的持续循环）
+                from .conversation_loop import get_loop_manager
+                
+                loop_manager = get_loop_manager()
+                
+                # 确保会话应该继续
+                session.should_continue = True
+                
+                # 获取或创建循环
+                await loop_manager.get_or_create_loop(session, user_name)
+
+                # 9. 标记消息为已读
+                for msg in unread_messages:
+                    context.mark_message_as_read(str(msg.message_id))
+
+                # 10. 保存 Session
+                await self.session_manager.save_session(user_id)
+
+                # 11. 更新统计
+                self._stats["messages_processed"] += len(unread_messages)
+
+                logger.info(
+                    f"[PFC] 消息已记录，会话循环运行中: user={user_name}, "
+                    f"new_messages={len(unread_messages)}"
+                )
+
+                return self._build_result(
+                    success=True,
+                    message="loop_running",
+                    user_id=user_id,
+                    user_name=user_name,
+                    new_messages=len(unread_messages),
+                )
+
+            except Exception as e:
+                self._stats["failed_responses"] += 1
+                logger.error(f"[PFC] 处理失败: {e}")
+                import traceback
+                traceback.print_exc()
+                return self._build_result(success=False, message=str(e), error=True)
+
+            finally:
+                self._processing = False
+
+    async def _build_chat_history_str(self, session: PFCSession, user_name: str) -> None:
+        """构建聊天历史字符串"""
+        lines = []
+
+        # 历史消息
+        for msg in session.observation_info.chat_history[-30:]:
+            msg_type = msg.get("type", "")
+            content = msg.get("content", "")
+            msg_time = msg.get("time", 0)
+
+            time_str = datetime.datetime.fromtimestamp(msg_time).strftime("%H:%M:%S") if msg_time else ""
+
+            if msg_type == "user_message":
+                sender = msg.get("user_name", user_name)
+                lines.append(f"[{time_str}] {sender}: {content}")
+            elif msg_type == "bot_message":
+                from src.config.config import global_config
+                bot_name = global_config.bot.nickname if global_config else "Bot"
+                lines.append(f"[{time_str}] {bot_name}: {content}")
+
+        session.observation_info.chat_history_str = "\n".join(lines)
+
+    def _build_result(
+        self,
+        success: bool,
+        message: str = "",
+        error: bool = False,
+        **kwargs,
+    ) -> dict:
+        """构建返回结果"""
+        result = {
+            "success": success,
+            "stream_id": self.stream_id,
+            "message": message,
+            "error": error,
+            "timestamp": time.time(),
+        }
+        result.update(kwargs)
+        return result
+
+    def get_stats(self) -> dict[str, Any]:
+        """获取统计信息"""
+        return self._stats.copy()
+
+    @property
+    def is_processing(self) -> bool:
+        """是否正在处理"""
+        return self._processing
