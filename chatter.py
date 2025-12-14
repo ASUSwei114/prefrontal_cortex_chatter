@@ -109,6 +109,11 @@ class PrefrontalCortexChatter(BaseChatter):
                 # 立即更新活动时间
                 session.update_activity()
 
+                # 3.5 如果本次运行还没有从数据库加载过历史，则加载（确保包含重启前的消息）
+                if not session._history_loaded_from_db:
+                    await self._load_initial_history(session, user_name)
+                    session._history_loaded_from_db = True
+
                 # 4. 检查是否在忽略期
                 if session.ignore_until_timestamp and time.time() < session.ignore_until_timestamp:
                     logger.info(f"[PFC] 用户 {user_id} 在忽略期内，跳过处理")
@@ -178,6 +183,84 @@ class PrefrontalCortexChatter(BaseChatter):
 
             finally:
                 self._processing = False
+
+    async def _load_initial_history(self, session: PFCSession, user_name: str) -> None:
+        """从数据库加载初始聊天历史（复刻原版PFC的初始化逻辑）"""
+        try:
+            from src.chat.utils.chat_message_builder import (
+                build_readable_messages,
+                get_raw_msg_before_timestamp_with_chat,
+            )
+            from src.config.config import global_config
+            
+            bot_qq = str(global_config.bot.qq_account) if global_config else ""
+            
+            logger.info(f"[PFC] 为 {self.stream_id} 加载初始聊天记录...")
+            
+            # 从数据库加载最近30条消息
+            initial_messages = await get_raw_msg_before_timestamp_with_chat(
+                chat_id=self.stream_id,
+                timestamp=time.time(),
+                limit=30,
+            )
+            
+            if initial_messages:
+                # 构建可读的聊天记录字符串
+                chat_history_str = await build_readable_messages(
+                    initial_messages,
+                    replace_bot_name=True,
+                    merge_messages=False,
+                    timestamp_mode="relative",
+                    read_mark=0.0,
+                )
+                
+                # 转换为 PFC 内部格式并填充到 session
+                # 清空旧的历史记录
+                session.observation_info.chat_history = []
+                
+                for msg in initial_messages:
+                    # 数据库返回的消息是扁平化的，user_id 直接在顶层
+                    sender_id = str(msg.get("user_id", ""))
+                    sender_name = msg.get("user_nickname", "") or msg.get("user_cardname", "") or user_name
+                    content = msg.get("processed_plain_text", "") or msg.get("display_message", "")
+                    msg_time = msg.get("time", 0)
+                    
+                    if sender_id == bot_qq:
+                        # Bot 消息
+                        session.observation_info.chat_history.append({
+                            "type": "bot_message",
+                            "content": content,
+                            "time": msg_time,
+                        })
+                    else:
+                        # 用户消息
+                        session.observation_info.chat_history.append({
+                            "type": "user_message",
+                            "content": content,
+                            "user_name": sender_name,
+                            "user_id": sender_id,
+                            "time": msg_time,
+                        })
+                
+                session.observation_info.chat_history_str = chat_history_str + "\n"
+                session.observation_info.chat_history_count = len(initial_messages)
+                
+                # 更新最后消息信息
+                if initial_messages:
+                    last_msg = initial_messages[-1]
+                    session.observation_info.last_message_time = last_msg.get("time")
+                    # 数据库返回的消息是扁平化的，user_id 直接在顶层
+                    session.observation_info.last_message_sender = str(last_msg.get("user_id", ""))
+                    session.observation_info.last_message_content = last_msg.get("processed_plain_text", "") or last_msg.get("display_message", "")
+                
+                logger.info(f"[PFC] 成功加载 {len(initial_messages)} 条初始聊天记录")
+            else:
+                logger.info(f"[PFC] 没有找到初始聊天记录")
+                
+        except Exception as e:
+            logger.error(f"[PFC] 加载初始聊天记录时出错: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def _build_chat_history_str(self, session: PFCSession, user_name: str) -> None:
         """构建聊天历史字符串"""

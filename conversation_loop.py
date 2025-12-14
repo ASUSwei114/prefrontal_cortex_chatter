@@ -318,7 +318,7 @@ class ConversationLoop:
             return False
     
     async def _send_reply(self):
-        """发送回复"""
+        """发送回复（支持多行拆分发送）"""
         from src.plugin_system.apis import send_api
         
         reply_content = self.session.generated_reply
@@ -326,16 +326,27 @@ class ConversationLoop:
             return
         
         try:
-            # 发送消息
-            await send_api.text_to_stream(
-                text=reply_content,
-                stream_id=self.session.stream_id,
-            )
+            # 将多行回复拆分成多条消息
+            lines = [line.strip() for line in reply_content.split('\n') if line.strip()]
             
-            # 记录到历史
-            self.session.add_bot_message(reply_content)
+            if not lines:
+                return
             
-            logger.info(f"[PFC][{self.user_name}] 成功发送回复: {reply_content[:50]}...")
+            for i, line in enumerate(lines):
+                # 发送消息
+                await send_api.text_to_stream(
+                    text=line,
+                    stream_id=self.session.stream_id,
+                )
+                
+                # 记录到历史
+                self.session.add_bot_message(line)
+                
+                # 多条消息之间稍微间隔，模拟真人打字
+                if i < len(lines) - 1:
+                    await asyncio.sleep(0.5)
+            
+            logger.info(f"[PFC][{self.user_name}] 成功发送 {len(lines)} 条回复")
             
         except Exception as e:
             logger.error(f"[PFC][{self.user_name}] 发送回复失败: {e}")

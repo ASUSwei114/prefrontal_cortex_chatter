@@ -80,6 +80,9 @@ class PFCSession:
         # 生成的回复（临时存储）
         self.generated_reply: str = ""
 
+        # 标记是否已从数据库加载历史（用于重启后刷新）
+        self._history_loaded_from_db: bool = False
+
     @property
     def state(self) -> ConversationState:
         return self._state
