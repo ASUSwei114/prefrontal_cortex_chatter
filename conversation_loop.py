@@ -62,6 +62,8 @@ class ConversationLoop:
         """
         PFC核心循环 - 复刻原版 _plan_and_action_loop
         """
+        logger.info(f"[PFC][{self.user_name}] 循环开始: _running={self._running}, should_continue={self.session.should_continue}")
+        
         while self._running and self.session.should_continue:
             # 忽略逻辑
             if self.session.ignore_until_timestamp and time.time() < self.session.ignore_until_timestamp:
@@ -128,6 +130,8 @@ class ConversationLoop:
             if self.session.should_continue:
                 await asyncio.sleep(0.1)
         
+        # 循环结束时，标记为不再运行
+        self._running = False
         logger.info(f"[PFC][{self.user_name}] PFC循环结束")
     
     def _check_new_messages_after_planning(self) -> bool:
@@ -473,16 +477,27 @@ class ConversationLoopManager:
         async with self._lock:
             user_id = session.user_id
             
+            logger.debug(f"[PFC][{user_name}] get_or_create_loop: user_id={user_id}, session.should_continue={session.should_continue}")
+            
             if user_id in self._loops:
                 loop = self._loops[user_id]
+                logger.debug(f"[PFC][{user_name}] 找到现有循环: _running={loop._running}, task={loop._task}")
+                
                 if loop._running:
+                    # 循环正在运行，直接返回
+                    logger.debug(f"[PFC][{user_name}] 复用现有运行中的循环")
                     return loop
+                else:
+                    # 循环已停止，需要清理并创建新循环
+                    logger.info(f"[PFC][{user_name}] 旧循环已停止，创建新循环")
+                    del self._loops[user_id]
             
             # 创建新循环
             loop = ConversationLoop(session, user_name)
             self._loops[user_id] = loop
             await loop.start()
             
+            logger.info(f"[PFC][{user_name}] 新会话循环已创建并启动")
             return loop
     
     async def stop_loop(self, user_id: str):
