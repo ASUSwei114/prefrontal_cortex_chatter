@@ -27,11 +27,15 @@ from typing import Any, ClassVar
 from src.common.logger import get_logger
 from src.plugin_system import register_plugin
 from src.plugin_system.base.base_plugin import BasePlugin
+from src.plugin_system.base.config_types import ConfigField
 
 from .chatter import PrefrontalCortexChatter
-from .config import get_config
+from .config import get_config, set_plugin_config
 
 logger = get_logger("pfc_plugin")
+
+# 配置文件版本号 - 更新配置结构时递增此版本
+CONFIG_VERSION = "1.0.0"
 
 
 @register_plugin
@@ -52,15 +56,107 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
     python_dependencies: ClassVar[list[str]] = []
     config_file_name: str = "config.toml"
 
+    # 配置节描述
+    config_section_descriptions: ClassVar[dict[str, str]] = {
+        "inner": "配置元信息",
+        "plugin": "插件基础配置",
+        "waiting": "等待行为配置",
+        "session": "会话管理配置",
+        "reply_checker": "回复检查器配置",
+    }
+
+    # 配置 Schema - 用于自动生成和同步配置文件
+    config_schema: ClassVar[dict[str, dict[str, ConfigField]]] = {
+        "inner": {
+            "version": ConfigField(
+                type=str,
+                default=CONFIG_VERSION,
+                description="配置文件版本号（用于配置文件升级与兼容性检查）",
+            ),
+        },
+        "plugin": {
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用 PFC 私聊聊天器",
+            ),
+            "enabled_stream_types": ConfigField(
+                type=list,
+                default=["private"],
+                description="启用的消息源类型",
+                example='["private"]',
+            ),
+        },
+        "waiting": {
+            "default_max_wait_seconds": ConfigField(
+                type=int,
+                default=300,
+                description="默认等待超时时间（秒）",
+            ),
+            "min_wait_seconds": ConfigField(
+                type=int,
+                default=30,
+                description="允许的最短等待时间（秒）",
+            ),
+            "max_wait_seconds": ConfigField(
+                type=int,
+                default=1800,
+                description="允许的最长等待时间（秒，30分钟）",
+            ),
+        },
+        "session": {
+            "session_dir": ConfigField(
+                type=str,
+                default="prefrontal_cortex_chatter/sessions",
+                description="会话数据存储目录（相对于 data/）",
+            ),
+            "session_expire_seconds": ConfigField(
+                type=int,
+                default=604800,
+                description="会话过期时间（秒，默认7天）",
+            ),
+            "max_history_entries": ConfigField(
+                type=int,
+                default=100,
+                description="最大历史记录条数",
+            ),
+        },
+        "reply_checker": {
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用回复检查器",
+            ),
+            "use_llm_check": ConfigField(
+                type=bool,
+                default=True,
+                description="是否使用 LLM 进行深度检查（否则只做基本检查）",
+            ),
+            "similarity_threshold": ConfigField(
+                type=float,
+                default=0.9,
+                description="相似度阈值（0-1），超过此值认为回复重复",
+            ),
+            "max_retries": ConfigField(
+                type=int,
+                default=3,
+                description="回复检查失败时的最大重试次数",
+            ),
+        },
+    }
+
     async def on_plugin_loaded(self):
         """插件加载时"""
+        # 将插件配置传递给 config 模块
+        set_plugin_config(self.config)
+        
         config = get_config()
 
         if not config.enabled:
             logger.info("[PFC] 插件已禁用")
             return
 
-        logger.info("[PFC] 插件已加载")
+        logger.info(f"[PFC] 插件已加载 (配置版本: {self.config.get('inner', {}).get('version', 'unknown')})")
 
     async def on_plugin_unloaded(self):
         """插件卸载时"""

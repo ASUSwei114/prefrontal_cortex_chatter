@@ -16,10 +16,14 @@ PFC - 配置
 
 ================================================================================
 
-可以通过 TOML 配置文件覆盖默认值
+配置加载优先级：
+1. 插件配置文件 (config/plugins/prefrontal_cortex_chatter/config.toml)
+2. 全局配置文件中的 prefrontal_cortex_chatter 节（兼容旧版）
+3. 默认值
 """
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -59,6 +63,16 @@ class PFCConfig:
 
 # 全局配置单例
 _config: PFCConfig | None = None
+# 插件配置字典（由 plugin.py 设置）
+_plugin_config: dict[str, Any] | None = None
+
+
+def set_plugin_config(config_dict: dict[str, Any]) -> None:
+    """设置插件配置（由 plugin.py 调用）"""
+    global _plugin_config, _config
+    _plugin_config = config_dict
+    # 重置配置单例，强制重新加载
+    _config = None
 
 
 def get_config() -> PFCConfig:
@@ -70,7 +84,72 @@ def get_config() -> PFCConfig:
 
 
 def load_config() -> PFCConfig:
-    """从全局配置加载 PFC 配置"""
+    """加载 PFC 配置
+    
+    优先从插件配置文件加载，如果没有则尝试从全局配置加载（兼容旧版）
+    """
+    config = PFCConfig()
+    
+    # 优先使用插件配置文件
+    if _plugin_config:
+        config = _load_from_plugin_config(_plugin_config)
+    else:
+        # 兼容旧版：从全局配置加载
+        config = _load_from_global_config()
+    
+    return config
+
+
+def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
+    """从插件配置字典加载配置"""
+    config = PFCConfig()
+    
+    try:
+        # 基础配置
+        if "plugin" in cfg:
+            plugin_cfg = cfg["plugin"]
+            config.enabled = plugin_cfg.get("enabled", True)
+            if "enabled_stream_types" in plugin_cfg:
+                config.enabled_stream_types = list(plugin_cfg["enabled_stream_types"])
+
+        # 等待配置
+        if "waiting" in cfg:
+            wait_cfg = cfg["waiting"]
+            config.waiting = WaitingConfig(
+                default_max_wait_seconds=wait_cfg.get("default_max_wait_seconds", 300),
+                min_wait_seconds=wait_cfg.get("min_wait_seconds", 30),
+                max_wait_seconds=wait_cfg.get("max_wait_seconds", 1800),
+            )
+
+        # 会话配置
+        if "session" in cfg:
+            sess_cfg = cfg["session"]
+            config.session = SessionConfig(
+                session_dir=sess_cfg.get("session_dir", "prefrontal_cortex_chatter/sessions"),
+                session_expire_seconds=sess_cfg.get("session_expire_seconds", 86400 * 7),
+                max_history_entries=sess_cfg.get("max_history_entries", 100),
+            )
+
+        # 回复检查器配置
+        if "reply_checker" in cfg:
+            checker_cfg = cfg["reply_checker"]
+            config.reply_checker = ReplyCheckerConfig(
+                enabled=checker_cfg.get("enabled", True),
+                use_llm_check=checker_cfg.get("use_llm_check", True),
+                similarity_threshold=checker_cfg.get("similarity_threshold", 0.9),
+                max_retries=checker_cfg.get("max_retries", 3),
+            )
+
+    except Exception as e:
+        from src.common.logger import get_logger
+        logger = get_logger("pfc_config")
+        logger.warning(f"从插件配置加载失败，使用默认值: {e}")
+
+    return config
+
+
+def _load_from_global_config() -> PFCConfig:
+    """从全局配置加载 PFC 配置（兼容旧版）"""
     from src.config.config import global_config
 
     config = PFCConfig()
@@ -121,7 +200,7 @@ def load_config() -> PFCConfig:
     except Exception as e:
         from src.common.logger import get_logger
         logger = get_logger("pfc_config")
-        logger.warning(f"加载 PFC 配置失败，使用默认值: {e}")
+        logger.warning(f"从全局配置加载失败，使用默认值: {e}")
 
     return config
 

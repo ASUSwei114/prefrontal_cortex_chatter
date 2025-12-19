@@ -41,6 +41,7 @@
 
 ### 可配置功能
 - 添加可配置的回复检查器（支持启用/禁用 LLM 检查）
+- 添加配置文件版本控制，支持自动更新配置结构
 
 ## ✨ 功能特性
 
@@ -76,23 +77,43 @@ prefrontal_cortex_chatter/
 
 ## ⚙️ 配置说明
 
-在 `config/plugins/prefrontal_cortex_chatter/config.toml` 中配置：
+配置文件位于 `config/plugins/prefrontal_cortex_chatter/config.toml`。
+
+### 配置文件版本控制
+
+插件使用 `inner.version` 字段进行配置文件版本控制。当插件更新导致配置结构变化时：
+- MoFox 会自动检测版本差异
+- 自动备份旧配置文件到 `backup/` 目录
+- 自动补全新增的配置项
+- 自动移除废弃的配置项
+- 保留用户已修改的配置值
+
+### 配置示例
 
 ```toml
-[prefrontal_cortex_chatter]
-enabled = true
+# 配置元信息
+[inner]
+version = "1.0.0"  # 配置文件版本号，请勿手动修改
 
-[prefrontal_cortex_chatter.waiting]
+# 插件基础配置
+[plugin]
+enabled = true
+enabled_stream_types = ["private"]
+
+# 等待行为配置
+[waiting]
 default_max_wait_seconds = 300  # 默认等待超时时间(秒)
 min_wait_seconds = 30           # 最短等待时间
 max_wait_seconds = 1800         # 最长等待时间(30分钟)
 
-[prefrontal_cortex_chatter.session]
+# 会话管理配置
+[session]
 session_dir = "prefrontal_cortex_chatter/sessions"
 session_expire_seconds = 604800  # 会话过期时间(7天)
 max_history_entries = 100        # 最大历史记录条数
 
-[prefrontal_cortex_chatter.reply_checker]
+# 回复检查器配置
+[reply_checker]
 enabled = true              # 是否启用回复检查器
 use_llm_check = true        # 是否使用 LLM 进行深度检查
 similarity_threshold = 0.9  # 相似度阈值(0-1)，超过此值判定为重复
