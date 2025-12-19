@@ -1,6 +1,24 @@
 """
 PFC Reply Action - PFC专属回复动作
 
+================================================================================
+版权声明 (Copyright Notice)
+================================================================================
+
+原始代码来源: MaiM-with-u (https://github.com/MaiM-with-u/MaiBot)
+原始版本: 0.6.3-fix4
+原始许可证: GNU General Public License v3.0
+
+本文件由 ASUSwei114 (https://github.com/ASUSwei114) 于 2024年12月 修改移植至 MoFox_Bot 项目。
+
+主要修改内容:
+- 适配 MoFox_Bot 的 Action 系统
+
+本项目遵循 GNU General Public License v3.0 许可证。
+详见 LICENSE 文件。
+
+================================================================================
+
 用于处理PFC聊天器的回复行为
 """
 

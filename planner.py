@@ -1,7 +1,26 @@
 """
 PFC - 行动规划器
 
-从 MaiM-with-u 0.6.3-fix4 移植的 ActionPlanner
+================================================================================
+版权声明 (Copyright Notice)
+================================================================================
+
+原始代码来源: MaiM-with-u (https://github.com/MaiM-with-u/MaiBot)
+原始版本: 0.6.3-fix4
+原始代码路径: src/plugins/PFC/
+原始许可证: GNU General Public License v3.0
+
+本文件由 ASUSwei114 (https://github.com/ASUSwei114) 于 2024年12月 修改移植至 MoFox_Bot 项目。
+
+主要修改内容:
+- 适配 MoFox_Bot 的 LLM API
+- 重构人格信息获取逻辑
+- 修复聊天历史构建问题
+
+本项目遵循 GNU General Public License v3.0 许可证。
+详见 LICENSE 文件。
+
+================================================================================
 
 负责根据当前对话状态规划下一步行动
 """
