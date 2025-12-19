@@ -648,6 +648,7 @@ class ReplyChecker:
     回复检查器
     
     检查生成的回复是否合适，是否需要重新生成
+    支持可配置的 LLM 检查功能
     """
     
     def __init__(
@@ -667,8 +668,10 @@ class ReplyChecker:
         self.stream_id = stream_id
         self.private_name = private_name
         self.config = config
+        self.checker_config = config.reply_checker
+        self.max_retries = self.checker_config.max_retries
         
-        logger.debug(f"[私聊][{private_name}]回复检查器初始化完成")
+        logger.debug(f"[私聊][{private_name}]回复检查器初始化完成 (LLM检查: {self.checker_config.use_llm_check})")
     
     async def check(
         self,
@@ -689,8 +692,12 @@ class ReplyChecker:
             retry_count: 重试次数
             
         Returns:
-            (is_valid, reason, should_retry) 元组
+            (is_valid, reason, need_replan) 元组
         """
+        # 如果检查器被禁用，直接返回通过
+        if not self.checker_config.enabled:
+            return True, "检查器已禁用，直接通过", False
+        
         # 基本检查
         if not reply or len(reply.strip()) == 0:
             return False, "回复为空", True
@@ -710,20 +717,48 @@ class ReplyChecker:
             if pattern in reply:
                 return False, f"包含不当内容: {pattern}", True
         
-        # 检查是否与最近的回复重复
-        if chat_history:
-            recent_bot_replies = [
-                msg.get("processed_plain_text", msg.get("content", ""))
-                for msg in chat_history[-5:]
-                if msg.get("sender", {}).get("user_id") == str(global_config.bot.qq_account)
-            ]
-            
-            for recent_reply in recent_bot_replies:
-                if self._is_similar(reply, recent_reply):
-                    return False, "与最近的回复过于相似", True
+        # 相似度检查 - 检查是否与最近的 Bot 回复重复
+        try:
+            bot_messages = self._get_recent_bot_messages(chat_history)
+            if bot_messages:
+                # 完全相同检查
+                if reply == bot_messages[0]:
+                    logger.warning(
+                        f"[私聊][{self.private_name}]ReplyChecker 检测到回复与上一条 Bot 消息完全相同: '{reply}'"
+                    )
+                    return (
+                        False,
+                        "被逻辑检查拒绝：回复内容与你上一条发言完全相同，可以选择深入话题或寻找其它话题或等待",
+                        True,
+                    )
+                
+                # 相似度检查
+                import difflib
+                similarity_ratio = difflib.SequenceMatcher(None, reply, bot_messages[0]).ratio()
+                logger.debug(f"[私聊][{self.private_name}]ReplyChecker - 相似度: {similarity_ratio:.2f}")
+                
+                if similarity_ratio > self.checker_config.similarity_threshold:
+                    logger.warning(
+                        f"[私聊][{self.private_name}]ReplyChecker 检测到回复与上一条 Bot 消息高度相似 "
+                        f"(相似度 {similarity_ratio:.2f}): '{reply}'"
+                    )
+                    return (
+                        False,
+                        f"被逻辑检查拒绝：回复内容与你上一条发言高度相似 (相似度 {similarity_ratio:.2f})，"
+                        "可以选择深入话题或寻找其它话题或等待。",
+                        True,
+                    )
+        except Exception as e:
+            import traceback
+            logger.error(f"[私聊][{self.private_name}]检查回复时出错: 类型={type(e)}, 值={e}")
+            logger.error(f"[私聊][{self.private_name}]{traceback.format_exc()}")
+        
+        # 如果启用 LLM 检查，调用 LLM 进行深度检查
+        if self.checker_config.use_llm_check:
+            return await self._llm_check(reply, goal, chat_history_str, retry_count)
         
         # 如果重试次数过多，接受当前回复
-        if retry_count >= 3:
+        if retry_count >= self.max_retries:
             logger.warning(
                 f"[私聊][{self.private_name}]"
                 f"重试次数过多({retry_count})，接受当前回复"
@@ -732,32 +767,160 @@ class ReplyChecker:
         
         return True, "回复检查通过", False
     
-    def _is_similar(self, text1: str, text2: str, threshold: float = 0.8) -> bool:
-        """
-        检查两段文本是否相似
+    def _get_recent_bot_messages(self, chat_history: List[Dict[str, Any]]) -> List[str]:
+        """获取最近的 Bot 消息"""
+        bot_messages = []
+        bot_qq = str(global_config.bot.qq_account) if global_config else ""
         
-        使用简单的字符重叠率判断
+        for msg in reversed(chat_history):
+            sender = msg.get("sender", {})
+            user_id = str(sender.get("user_id", ""))
+            
+            if user_id == bot_qq:
+                content = msg.get("processed_plain_text", msg.get("content", ""))
+                if content:
+                    bot_messages.append(content)
+            
+            if len(bot_messages) >= 2:
+                break
+        
+        return bot_messages
+    
+    async def _llm_check(
+        self,
+        reply: str,
+        goal: str,
+        chat_history_str: str,
+        retry_count: int
+    ) -> tuple[bool, str, bool]:
+        """
+        使用 LLM 进行深度检查
         
         Args:
-            text1: 文本1
-            text2: 文本2
-            threshold: 相似度阈值
+            reply: 生成的回复
+            goal: 当前目标
+            chat_history_str: 聊天历史字符串
+            retry_count: 重试次数
             
         Returns:
-            是否相似
+            (is_valid, reason, need_replan) 元组
         """
-        if not text1 or not text2:
-            return False
+        prompt = f"""你是一个聊天逻辑检查器，请检查以下回复或消息是否合适：
+
+当前对话目标：{goal}
+最新的对话记录：
+{chat_history_str}
+
+待检查的消息：
+{reply}
+
+请结合聊天记录检查以下几点：
+1. 这条消息是否依然符合当前对话目标和实现方式
+2. 这条消息是否与最新的对话记录保持一致性
+3. 是否存在重复发言，或重复表达同质内容（尤其是只是换一种方式表达了相同的含义）
+4. 这条消息是否包含违规内容（例如血腥暴力，政治敏感等）
+5. 这条消息是否以发送者的角度发言（不要让发送者自己回复自己的消息）
+6. 这条消息是否通俗易懂
+7. 这条消息是否有些多余，例如在对方没有回复的情况下，依然连续多次"消息轰炸"（尤其是已经连续发送3条信息的情况，这很可能不合理，需要着重判断）
+8. 这条消息是否使用了完全没必要的修辞
+9. 这条消息是否逻辑通顺
+10. 这条消息是否太过冗长了（通常私聊的每条消息长度在20字以内，除非特殊情况）
+11. 在连续多次发送消息的情况下，这条消息是否衔接自然，会不会显得奇怪（例如连续两条消息中部分内容重叠）
+
+请以JSON格式输出，包含以下字段：
+1. suitable: 是否合适 (true/false)
+2. reason: 原因说明
+3. need_replan: 是否需要重新决策 (true/false)，当你认为此时已经不适合发消息，需要规划其它行动时，设为true
+
+输出格式示例：
+{{
+    "suitable": true,
+    "reason": "回复符合要求，虽然有可能略微偏离目标，但是整体内容流畅得体",
+    "need_replan": false
+}}
+
+注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
+
+        try:
+            models = llm_api.get_available_models()
+            checker_config = models.get("utils")
+            
+            if not checker_config:
+                logger.warning("[PFC] 未找到 utils 模型配置，跳过 LLM 检查")
+                return True, "LLM 检查跳过（无模型配置）", False
+            
+            success, content, _, _ = await llm_api.generate_with_model(
+                prompt=prompt,
+                model_config=checker_config,
+                request_type="pfc.reply_check",
+            )
+            
+            if not success or not content:
+                logger.warning(f"[私聊][{self.private_name}]LLM 检查调用失败")
+                return True, "LLM 检查跳过（调用失败）", False
+            
+            logger.debug(f"[私聊][{self.private_name}]检查回复的原始返回: {content}")
+            
+            # 解析 JSON 响应
+            return self._parse_llm_response(content, retry_count)
+            
+        except Exception as e:
+            logger.error(f"[私聊][{self.private_name}]LLM 检查时出错: {e}")
+            if retry_count >= self.max_retries:
+                return False, "多次检查失败，建议重新规划", True
+            return False, f"检查过程出错，建议重试: {str(e)}", False
+    
+    def _parse_llm_response(
+        self,
+        content: str,
+        retry_count: int
+    ) -> tuple[bool, str, bool]:
+        """解析 LLM 响应"""
+        import json
+        import re
         
-        # 简单的字符集重叠率
-        set1 = set(text1)
-        set2 = set(text2)
+        content = content.strip()
         
-        intersection = len(set1 & set2)
-        union = len(set1 | set2)
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            # 尝试提取 JSON 部分
+            json_pattern = r"\{[^{}]*\}"
+            json_match = re.search(json_pattern, content)
+            if json_match:
+                try:
+                    result = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    return self._fallback_parse(content, retry_count)
+            else:
+                return self._fallback_parse(content, retry_count)
         
-        if union == 0:
-            return False
+        # 验证 JSON 字段
+        suitable = result.get("suitable", None)
+        reason = result.get("reason", "未提供原因")
+        need_replan = result.get("need_replan", False)
         
-        similarity = intersection / union
-        return similarity >= threshold
+        # 如果 suitable 字段是字符串，转换为布尔值
+        if isinstance(suitable, str):
+            suitable = suitable.lower() == "true"
+        
+        # 如果 suitable 字段不存在或不是布尔值，从 reason 中判断
+        if suitable is None:
+            suitable = "不合适" not in reason.lower() and "违规" not in reason.lower()
+        
+        # 如果不合适且未达到最大重试次数，返回需要重试
+        if not suitable and retry_count < self.max_retries:
+            return False, reason, False
+        
+        # 如果不合适且已达到最大重试次数，返回需要重新规划
+        if not suitable and retry_count >= self.max_retries:
+            return False, f"多次重试后仍不合适: {reason}", True
+        
+        return suitable, reason, need_replan
+    
+    def _fallback_parse(self, content: str, retry_count: int) -> tuple[bool, str, bool]:
+        """从文本中判断结果（备选方案）"""
+        is_suitable = "不合适" not in content.lower() and "违规" not in content.lower()
+        reason = content[:100] if content else "无法解析响应"
+        need_replan = "重新规划" in content.lower() or "目标不适合" in content.lower()
+        return is_suitable, reason, need_replan

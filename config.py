@@ -23,6 +23,15 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class ReplyCheckerConfig:
+    """回复检查器配置"""
+    enabled: bool = True                  # 是否启用回复检查器
+    use_llm_check: bool = True            # 是否使用 LLM 进行检查（否则只做基本检查）
+    similarity_threshold: float = 0.9     # 相似度阈值（0-1）
+    max_retries: int = 3                  # 最大重试次数
+
+
+@dataclass
 class WaitingConfig:
     """等待配置"""
     default_max_wait_seconds: int = 300  # 默认等待超时时间（秒）
@@ -45,6 +54,7 @@ class PFCConfig:
     enabled_stream_types: list[str] = field(default_factory=lambda: ["private"])
     waiting: WaitingConfig = field(default_factory=WaitingConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
+    reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)
 
 
 # 全局配置单例
@@ -96,6 +106,16 @@ def load_config() -> PFCConfig:
                     session_dir=getattr(sess_cfg, "session_dir", "prefrontal_cortex_chatter/sessions"),
                     session_expire_seconds=getattr(sess_cfg, "session_expire_seconds", 86400 * 7),
                     max_history_entries=getattr(sess_cfg, "max_history_entries", 100),
+                )
+
+            # 回复检查器配置
+            if hasattr(pfc_cfg, "reply_checker"):
+                checker_cfg = pfc_cfg.reply_checker
+                config.reply_checker = ReplyCheckerConfig(
+                    enabled=getattr(checker_cfg, "enabled", True),
+                    use_llm_check=getattr(checker_cfg, "use_llm_check", True),
+                    similarity_threshold=getattr(checker_cfg, "similarity_threshold", 0.9),
+                    max_retries=getattr(checker_cfg, "max_retries", 3),
                 )
 
     except Exception as e:

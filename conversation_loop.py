@@ -225,9 +225,10 @@ class ConversationLoop:
     
     async def _handle_reply_action(self, action_type: str, action_index: int) -> bool:
         """处理回复类行动（direct_reply 或 send_new_message）"""
-        from .replyer import ReplyGenerator
+        from .replyer import ReplyGenerator, ReplyChecker
         
-        max_reply_attempts = 3
+        # 从配置获取最大重试次数
+        max_reply_attempts = self.config.reply_checker.max_retries
         reply_attempt_count = 0
         is_suitable = False
         need_replan = False
@@ -235,6 +236,11 @@ class ConversationLoop:
         final_reply_to_send = ""
         
         replyer = ReplyGenerator(self.session, self.user_name)
+        checker = ReplyChecker(
+            self.session.stream_id,
+            self.user_name,
+            self.config
+        )
         
         while reply_attempt_count < max_reply_attempts and not is_suitable:
             reply_attempt_count += 1
@@ -254,16 +260,21 @@ class ConversationLoop:
                 check_reason = f"第 {reply_attempt_count} 次生成回复为空"
                 continue
             
-            # 2. 检查回复
+            # 2. 检查回复（使用独立的 ReplyChecker）
             self.session.state = ConversationState.CHECKING
             try:
                 current_goal_str = (
                     self.session.conversation_info.goal_list[0].get("goal", "")
                     if self.session.conversation_info.goal_list else ""
                 )
-                is_suitable, check_reason, need_replan = await replyer.check_reply(
+                
+                # 使用 ReplyChecker 进行检查
+                is_suitable, check_reason, need_replan = await checker.check(
                     reply=reply_content,
                     goal=current_goal_str,
+                    chat_history=self.session.observation_info.chat_history,
+                    chat_history_str=self.session.observation_info.chat_history_str,
+                    retry_count=reply_attempt_count - 1,
                 )
                 logger.info(
                     f"[PFC][{self.user_name}] 第 {reply_attempt_count} 次检查结果: "
