@@ -425,6 +425,8 @@ class ReplyGenerator:
         """
         构建聊天历史文本
         
+        PFC 使用自定义的消息格式，使用简单格式化方法。
+        
         Args:
             observation_info: 观察信息
             
@@ -434,17 +436,20 @@ class ReplyGenerator:
         chat_history_text = observation_info.chat_history_str
         
         # 如果有新消息，添加新消息部分
-        if (observation_info.new_messages_count > 0 and 
+        if (observation_info.new_messages_count > 0 and
             observation_info.unprocessed_messages):
             
             new_messages_str = self._format_messages(
                 observation_info.unprocessed_messages
             )
-            chat_history_text += (
-                f"\n--- 以下是 {observation_info.new_messages_count} "
-                f"条新消息 ---\n{new_messages_str}"
-            )
-        elif not chat_history_text:
+            
+            if new_messages_str:  # 只有有内容时才添加
+                chat_history_text += (
+                    f"\n--- 以下是 {observation_info.new_messages_count} "
+                    f"条新消息 ---\n{new_messages_str}"
+                )
+        
+        if not chat_history_text:
             chat_history_text = "还没有聊天记录。"
         
         return chat_history_text

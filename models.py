@@ -170,33 +170,44 @@ class ObservationInfo:
         )
 
     async def clear_unprocessed_messages(self, bot_name: str = "Bot") -> None:
-        """清理未处理消息，将其合并到历史并更新历史字符串"""
-        if self.unprocessed_messages:
-            # 先更新 chat_history_str，将新消息追加进去
-            from src.config.config import global_config
-            actual_bot_name = global_config.bot.nickname if global_config else bot_name
-            
-            new_lines = []
-            for msg in self.unprocessed_messages:
-                if msg.get("type") == "user_message":
-                    sender_name = msg.get("user_name", "用户")
-                    content = msg.get("content", "")
+        """清理未处理消息，将其合并到历史并更新历史字符串
+        
+        PFC 使用自定义的消息格式，直接使用简单拼接来构建聊天历史字符串。
+        """
+        if not self.unprocessed_messages:
+            return
+        
+        # 将未处理消息合并到历史列表
+        max_history_len = 100  # 最多保留100条历史记录
+        self.chat_history.extend(self.unprocessed_messages)
+        if len(self.chat_history) > max_history_len:
+            self.chat_history = self.chat_history[-max_history_len:]
+        
+        # 使用简单拼接构建历史字符串
+        # 只使用最近一部分生成，例如20条
+        history_slice_for_str = self.chat_history[-20:]
+        
+        from src.config.config import global_config
+        actual_bot_name = global_config.bot.nickname if global_config else bot_name
+        
+        new_lines = []
+        for msg in history_slice_for_str:
+            if msg.get("type") == "user_message":
+                sender_name = msg.get("user_name", "用户")
+                content = msg.get("content", "")
+                if content:  # 只添加有内容的消息
                     new_lines.append(f"{sender_name}: {content}")
-                elif msg.get("type") == "bot_message":
-                    content = msg.get("content", "")
+            elif msg.get("type") == "bot_message":
+                content = msg.get("content", "")
+                if content:  # 只添加有内容的消息
                     new_lines.append(f"{actual_bot_name}: {content}")
-            
-            if new_lines:
-                if self.chat_history_str:
-                    self.chat_history_str += "\n" + "\n".join(new_lines)
-                else:
-                    self.chat_history_str = "\n".join(new_lines)
-            
-            # 将未处理消息合并到历史列表
-            self.chat_history.extend(self.unprocessed_messages)
-            self.chat_history_count += len(self.unprocessed_messages)
-            self.unprocessed_messages = []
-            self.new_messages_count = 0
+        
+        self.chat_history_str = "\n".join(new_lines)
+        
+        # 清空未处理消息列表和计数
+        self.unprocessed_messages = []
+        self.new_messages_count = 0
+        self.chat_history_count = len(self.chat_history)
 
 
 @dataclass

@@ -451,7 +451,10 @@ class ActionPlanner:
         return knowledge_info_str
 
     def _get_chat_history_text(self) -> str:
-        """获取聊天历史文本"""
+        """获取聊天历史文本
+        
+        PFC 使用自定义的消息格式，使用简单格式化方法。
+        """
         chat_history_text = self.session.observation_info.chat_history_str
 
         # 添加新消息
@@ -462,14 +465,20 @@ class ActionPlanner:
                 new_lines = []
                 for msg in unprocessed:
                     content = msg.get("content", "")
+                    if not content:  # 跳过空内容
+                        continue
                     user_name = msg.get("user_name", "用户")
-                    msg_time = msg.get("time", 0)
-                    import datetime
-                    time_str = datetime.datetime.fromtimestamp(msg_time).strftime("%H:%M:%S") if msg_time else ""
-                    new_lines.append(f"[{time_str}] {user_name}: {content}")
-
-                new_messages_str = "\n".join(new_lines)
-                chat_history_text += f"\n--- 以下是 {new_messages_count} 条新消息 ---\n{new_messages_str}"
+                    msg_type = msg.get("type", "")
+                    
+                    # 根据消息类型格式化
+                    if msg_type == "bot_message":
+                        new_lines.append(f"{self.bot_name}: {content}")
+                    else:
+                        new_lines.append(f"{user_name}: {content}")
+                
+                if new_lines:
+                    new_messages_str = "\n".join(new_lines)
+                    chat_history_text += f"\n--- 以下是 {new_messages_count} 条新消息 ---\n{new_messages_str}"
 
         if not chat_history_text:
             chat_history_text = "还没有聊天记录。"
