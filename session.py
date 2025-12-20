@@ -147,7 +147,55 @@ class PFCSession:
         # 重置连续超时计数
         self.consecutive_timeout_count = 0
         self.last_user_message_at = msg_time
+        
+        # 清除超时相关的目标（用户发消息了，说明对话还在继续）
+        self._clear_timeout_goals()
+        
         self.update_activity()
+    
+    def _clear_timeout_goals(self) -> None:
+        """
+        清除超时相关的目标
+        
+        当用户发送新消息时，应该清除之前因等待超时而添加的目标，
+        避免 AI 错误地认为"已经等待了X分钟"。
+        
+        超时目标的特征是包含"分钟，思考接下来要做什么"或类似的文本。
+        """
+        if not self.conversation_info.goal_list:
+            return
+        
+        # 过滤掉超时相关的目标
+        timeout_keywords = [
+            "分钟，思考接下来要做什么",
+            "分钟，注意可能在对方看来聊天已经结束",
+            "对方似乎话说一半突然消失了",
+        ]
+        
+        original_count = len(self.conversation_info.goal_list)
+        filtered_goals = []
+        
+        for goal_item in self.conversation_info.goal_list:
+            if isinstance(goal_item, dict):
+                goal_text = goal_item.get("goal", "")
+                if isinstance(goal_text, str):
+                    # 检查是否是超时目标
+                    is_timeout_goal = any(
+                        keyword in goal_text for keyword in timeout_keywords
+                    )
+                    if not is_timeout_goal:
+                        filtered_goals.append(goal_item)
+                else:
+                    filtered_goals.append(goal_item)
+            else:
+                filtered_goals.append(goal_item)
+        
+        removed_count = original_count - len(filtered_goals)
+        if removed_count > 0:
+            self.conversation_info.goal_list = filtered_goals
+            logger.debug(
+                f"Session {self.user_id} 清除了 {removed_count} 个超时目标"
+            )
 
     def add_bot_message(
         self,
