@@ -56,13 +56,20 @@ from .waiter import Waiter
 
 __plugin_meta__ = PluginMetadata(
     name="Prefrontal Cortex Chatter",
-    description="从 MaiM-with-u 0.6.3-fix4 移植的私聊系统，支持目标驱动的对话管理",
-    usage="在私聊场景中自动启用，可通过 [prefrontal_cortex_chatter].enable 配置",
+    description="从 MaiM-with-u 0.6.3-fix4 移植的私聊系统，支持目标驱动的对话管理、多种行动类型、回复质量检查等功能",
+    usage="在私聊场景中自动启用，可通过 config/plugins/prefrontal_cortex_chatter/config.toml 配置",
     version="1.0.0",
-    author="ASUSwei114 (基于 MaiM-with-u)",
-    keywords=["chatter", "pfc", "private", "goal-driven", "planning"],
+    author="ASUSwei114",
+    license="GPL-3.0-or-later",
+    repository_url="https://github.com/ASUSwei114/prefrontal_cortex_chatter",
+    keywords=["chatter", "pfc", "private", "goal-driven", "planning", "maibot"],
     categories=["Chat", "AI", "Planning"],
-    extra={"is_built_in": True, "chat_type": "private"},
+    extra={
+        "is_built_in": False,
+        "chat_type": "private",
+        "original_project": "https://github.com/MaiM-with-u/MaiBot",
+        "original_version": "0.6.3-fix4",
+    },
 )
 
 __all__ = [

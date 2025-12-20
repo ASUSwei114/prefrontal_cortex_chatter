@@ -1,3 +1,6 @@
+
+
+
 # Prefrontal Cortex Chatter (PFC)
 
 基于前额叶皮层概念的智能私聊系统，支持目标导向对话、知识获取等功能。
@@ -128,6 +131,9 @@ max_retries = 3             # 最大重试次数
 | `use_llm_check` | `true` | 是否使用 LLM 进行深度检查。设为 `false` 只做基本检查（空回复、过长、相似度） |
 | `similarity_threshold` | `0.9` | 相似度阈值，超过此值判定为与上一条回复重复 |
 | `max_retries` | `3` | 回复生成的最大重试次数 |
+
+## ⚠️ **注意事项
+使用本插件时，请确保已在 `config/bot_config.toml` 中关闭 `[kokoro_flow_chatter]`（心流聊天器）相关配置，否则私聊将不会由本插件接管，可能导致冲突或功能异常。**
 
 ## 📄 许可证
 
