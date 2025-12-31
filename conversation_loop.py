@@ -35,10 +35,9 @@ import time
 from typing import Dict, Optional
 
 from src.common.logger import get_logger
-from src.config.config import global_config
 
 from .models import ConversationState
-from .session import PFCSession, get_session_manager
+from .session import PFCSession
 from .config import get_config
 
 logger = get_logger("pfc_loop")

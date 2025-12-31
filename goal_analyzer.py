@@ -33,8 +33,7 @@ from src.individuality.individuality import get_individuality
 from src.config.config import global_config
 
 from .models import ObservationInfo, ConversationInfo
-from .config import PFCConfig
-from .utils import get_items_from_json, extract_json_from_text, extract_json_array_from_text
+from .utils import extract_json_from_text, extract_json_array_from_text
 
 logger = get_logger("PFC-GoalAnalyzer")
 
@@ -155,7 +154,7 @@ class GoalAnalyzer:
         self.max_goals = 3  # 同时保持的最大目标数量
         self.current_goal_and_reason = None
         
-        logger.debug(f"[PFC]目标分析器初始化完成")
+        logger.debug("[PFC]目标分析器初始化完成")
     
     async def _ensure_personality_info(self) -> str:
         """
@@ -237,7 +236,7 @@ class GoalAnalyzer:
         conversation_info = self.session.conversation_info
         observation_info = self.session.observation_info
         
-        logger.debug(f"[PFC]开始分析对话目标...")
+        logger.debug("[PFC]开始分析对话目标...")
         
         # 构建Prompt参数
         prompt_params = await self._build_prompt_params(

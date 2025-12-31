@@ -29,10 +29,27 @@ from src.plugin_system import register_plugin
 from src.plugin_system.base.base_plugin import BasePlugin
 from src.plugin_system.base.config_types import ConfigField
 
-from .chatter import PrefrontalCortexChatter
+from .chatter import PrefrontalCortexChatter as _PrefrontalCortexChatter
 from .config import get_config, set_plugin_config
 
 logger = get_logger("pfc_plugin")
+
+
+# 重新导出组件类，让 MPDT ComponentValidator 能够识别
+# （MPDT 静态分析器无法跟踪跨文件导入，需要在 plugin.py 中定义类引用）
+class PrefrontalCortexChatter(_PrefrontalCortexChatter):
+    """PFC 私聊聊天器 - 从 chatter.py 导入"""
+    pass
+
+
+# 为 MPDT ComponentValidator 定义 PFCReplyAction 类
+from .actions.reply import PFCReplyAction as _PFCReplyAction
+
+
+class PFCReplyAction(_PFCReplyAction):
+    """PFC 专属回复动作 - 从 actions/reply.py 导入"""
+    pass
+
 
 # 配置文件版本号 - 更新配置结构时递增此版本
 CONFIG_VERSION = "1.0.1"
@@ -237,9 +254,7 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             logger.error(f"[PFC] 加载 Chatter 组件失败: {e}")
 
         try:
-            # 注册 PFC 专属 Reply 动作
-            from .actions.reply import PFCReplyAction
-
+            # 注册 PFC 专属 Reply 动作（使用本文件中定义的包装类）
             components.append((
                 PFCReplyAction.get_action_info(),
                 PFCReplyAction,

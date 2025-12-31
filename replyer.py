@@ -33,7 +33,7 @@ from src.plugin_system.apis import llm_api
 from src.individuality.individuality import get_individuality
 from src.config.config import global_config
 
-from .models import ObservationInfo, ConversationInfo, ActionType
+from .models import ObservationInfo, ConversationInfo
 from .config import PFCConfig
 
 logger = get_logger("PFC-Replyer")

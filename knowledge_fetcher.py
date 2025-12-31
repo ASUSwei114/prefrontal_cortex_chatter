@@ -20,7 +20,7 @@ PFC知识获取器模块
 负责从记忆系统和知识库中获取相关知识
 """
 
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any
 from src.common.logger import get_logger
 from src.plugin_system.apis import llm_api
 

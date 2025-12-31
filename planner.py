@@ -385,7 +385,6 @@ class ActionPlanner:
         """获取距离 Bot 上次发言的时间信息"""
         time_since_last_bot_message_info = ""
         try:
-            bot_id = str(global_config.bot.qq_account) if global_config else ""
             chat_history = self.session.observation_info.chat_history
 
             for msg in reversed(chat_history):

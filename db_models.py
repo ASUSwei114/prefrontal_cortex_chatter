@@ -15,7 +15,6 @@ PFC - 数据库模型
 定义 PFC 会话的数据库模型，支持 SQLite 和 PostgreSQL。
 """
 
-import datetime
 import time
 
 from sqlalchemy import Boolean, Float, Index, Integer, Text

@@ -30,7 +30,6 @@ PFC - Chatter 主类
 """
 
 import asyncio
-import datetime
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -275,7 +274,7 @@ class PrefrontalCortexChatter(BaseChatter):
                 
                 logger.info(f"[PFC] 成功加载 {len(initial_messages)} 条初始聊天记录")
             else:
-                logger.info(f"[PFC] 没有找到初始聊天记录")
+                logger.info("[PFC] 没有找到初始聊天记录")
                 
         except Exception as e:
             logger.error(f"[PFC] 加载初始聊天记录时出错: {e}")
