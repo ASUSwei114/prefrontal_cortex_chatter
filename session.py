@@ -216,16 +216,42 @@ class PFCSession:
         self.observation_info.chat_history.append(msg_dict)
         self.observation_info.chat_history_count += 1
         
-        # 同时更新 chat_history_str，确保 bot 消息能被 LLM 看到
+        # 同时更新 chat_history_str，使用相对时间格式
         bot_name = global_config.bot.nickname if global_config else "Bot"
-        bot_line = f"{bot_name}: {content}"
+        readable_time = self._translate_timestamp(msg_time)
+        
+        # 格式化内容
+        stripped_content = content.strip()
+        if stripped_content.endswith("。"):
+            stripped_content = stripped_content[:-1]
+        
+        bot_block = f"{readable_time} {bot_name}(你) 说:\n{stripped_content};\n"
+        
         if self.observation_info.chat_history_str:
-            self.observation_info.chat_history_str += "\n" + bot_line
+            self.observation_info.chat_history_str += "\n" + bot_block
         else:
-            self.observation_info.chat_history_str = bot_line
+            self.observation_info.chat_history_str = bot_block
         
         self._trim_history()
         self.update_activity()
+    
+    def _translate_timestamp(self, timestamp: float) -> str:
+        """将时间戳转换为相对时间格式"""
+        now = time.time()
+        diff = now - timestamp
+        
+        if diff < 20:
+            return "刚刚"
+        elif diff < 60:
+            return f"{int(diff)}秒前"
+        elif diff < 3600:
+            return f"{int(diff / 60)}分钟前"
+        elif diff < 86400:
+            return f"{int(diff / 3600)}小时前"
+        elif diff < 86400 * 2:
+            return f"{int(diff / 86400)}天前"
+        else:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
     def _trim_history(self) -> None:
         """裁剪历史记录"""
@@ -388,7 +414,10 @@ class SessionManager:
     """
     会话管理器
 
-    负责会话的创建、获取、保存和清理
+    负责会话的创建、获取、保存和清理。
+    支持两种存储后端：
+    - file: JSON 文件存储（默认）
+    - database: 数据库存储（支持 SQLite/PostgreSQL）
     """
 
     _instance: Optional["SessionManager"] = None
@@ -402,6 +431,7 @@ class SessionManager:
         self,
         data_dir: str = "data/prefrontal_cortex_chatter/sessions",
         max_session_age_days: int = 30,
+        storage_backend: str = "file",
     ):
         if hasattr(self, "_initialized") and self._initialized:
             return
@@ -409,15 +439,33 @@ class SessionManager:
         self._initialized = True
         self.data_dir = Path(data_dir)
         self.max_session_age_days = max_session_age_days
+        self.storage_backend = storage_backend
 
         # 内存缓存
         self._sessions: dict[str, PFCSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
-        # 确保数据目录存在
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        # 数据库存储后端（延迟初始化）
+        self._db_storage = None
 
-        logger.info(f"SessionManager 初始化完成: {self.data_dir}")
+        # 根据存储后端初始化
+        if storage_backend == "file":
+            # 确保数据目录存在
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"SessionManager 初始化完成 (file 后端): {self.data_dir}")
+        elif storage_backend == "database":
+            logger.info("SessionManager 初始化完成 (database 后端)")
+        else:
+            logger.warning(f"未知的存储后端 '{storage_backend}'，使用 file 后端")
+            self.storage_backend = "file"
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_db_storage(self):
+        """获取数据库存储后端（延迟初始化）"""
+        if self._db_storage is None:
+            from .db_storage import get_db_storage
+            self._db_storage = get_db_storage()
+        return self._db_storage
 
     def _get_lock(self, user_id: str) -> asyncio.Lock:
         """获取用户级别的锁"""
@@ -439,8 +487,12 @@ class SessionManager:
                 session.stream_id = stream_id
                 return session
 
-            # 尝试从文件加载
-            session = await self._load_from_file(user_id)
+            # 根据存储后端加载
+            if self.storage_backend == "database":
+                session = await self._load_from_database(user_id)
+            else:
+                session = await self._load_from_file(user_id)
+
             if session:
                 session.stream_id = stream_id
                 self._sessions[user_id] = session
@@ -468,27 +520,58 @@ class SessionManager:
             logger.error(f"加载会话失败 {user_id}: {e}")
             return None
 
+    async def _load_from_database(self, user_id: str) -> PFCSession | None:
+        """从数据库加载会话"""
+        try:
+            db_storage = self._get_db_storage()
+            data = await db_storage.load_session(user_id)
+            if data:
+                session = PFCSession.from_dict(data)
+                logger.debug(f"从数据库加载会话: {user_id}")
+                return session
+            return None
+        except Exception as e:
+            logger.error(f"从数据库加载会话失败 {user_id}: {e}")
+            return None
+
     async def save_session(self, user_id: str) -> bool:
-        """保存会话到文件"""
+        """保存会话"""
         async with self._get_lock(user_id):
             if user_id not in self._sessions:
                 return False
 
             session = self._sessions[user_id]
-            file_path = self._get_file_path(user_id)
 
-            try:
-                data = session.to_dict()
-                temp_path = file_path.with_suffix(".json.tmp")
+            if self.storage_backend == "database":
+                return await self._save_to_database(session)
+            else:
+                return await self._save_to_file(session)
 
-                with open(temp_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+    async def _save_to_file(self, session: PFCSession) -> bool:
+        """保存会话到文件"""
+        file_path = self._get_file_path(session.user_id)
 
-                os.replace(temp_path, file_path)
-                return True
-            except Exception as e:
-                logger.error(f"保存会话失败 {user_id}: {e}")
-                return False
+        try:
+            data = session.to_dict()
+            temp_path = file_path.with_suffix(".json.tmp")
+
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            os.replace(temp_path, file_path)
+            return True
+        except Exception as e:
+            logger.error(f"保存会话到文件失败 {session.user_id}: {e}")
+            return False
+
+    async def _save_to_database(self, session: PFCSession) -> bool:
+        """保存会话到数据库"""
+        try:
+            db_storage = self._get_db_storage()
+            return await db_storage.save_session(session)
+        except Exception as e:
+            logger.error(f"保存会话到数据库失败 {session.user_id}: {e}")
+            return False
 
     async def save_all(self) -> int:
         """保存所有会话"""
@@ -516,8 +599,22 @@ _session_manager: SessionManager | None = None
 
 
 def get_session_manager() -> SessionManager:
-    """获取全局会话管理器"""
+    """获取全局会话管理器
+    
+    根据配置自动选择存储后端：
+    - file: JSON 文件存储（默认）
+    - database: 数据库存储（使用 MoFox 数据库，支持 SQLite/PostgreSQL）
+    """
     global _session_manager
     if _session_manager is None:
-        _session_manager = SessionManager()
+        from .config import get_config
+        config = get_config()
+        
+        storage_backend = config.session.storage_backend
+        session_dir = f"data/{config.session.session_dir}"
+        
+        _session_manager = SessionManager(
+            data_dir=session_dir,
+            storage_backend=storage_backend,
+        )
     return _session_manager

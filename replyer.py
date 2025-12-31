@@ -26,6 +26,7 @@ PFC回复生成器模块
 负责根据不同的行动类型生成相应的回复内容
 """
 
+import time
 from typing import Optional, List, Dict, Any
 from src.common.logger import get_logger
 from src.plugin_system.apis import llm_api
@@ -38,6 +39,42 @@ from .config import PFCConfig
 logger = get_logger("PFC-Replyer")
 
 
+def translate_timestamp_to_human_readable(timestamp: float, mode: str = "relative") -> str:
+    """
+    将时间戳转换为人类可读的时间格式
+    
+    移植自原版 MaiM-with-u 的 src/plugins/chat/utils.py
+    
+    Args:
+        timestamp: 时间戳
+        mode: 转换模式，"normal"为标准格式，"relative"为相对时间格式
+        
+    Returns:
+        str: 格式化后的时间字符串
+    """
+    if mode == "normal":
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+    elif mode == "relative":
+        now = time.time()
+        diff = now - timestamp
+        
+        if diff < 20:
+            return "刚刚"
+        elif diff < 60:
+            return f"{int(diff)}秒前"
+        elif diff < 3600:
+            return f"{int(diff / 60)}分钟前"
+        elif diff < 86400:
+            return f"{int(diff / 3600)}小时前"
+        elif diff < 86400 * 2:
+            return f"{int(diff / 86400)}天前"
+        else:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+    else:  # mode = "lite" or unknown
+        # 只返回时分秒格式
+        return time.strftime("%H:%M:%S", time.localtime(timestamp))
+
+
 # ============== Prompt 模板 ==============
 
 # Prompt for direct_reply (首次回复)
@@ -45,6 +82,9 @@ PROMPT_DIRECT_REPLY = """{persona_text}
 
 【回复风格要求】
 {reply_style}
+
+【当前时间】
+{current_time_str}
 
 现在你在参与一场QQ私聊，请根据以下信息生成一条回复：
 
@@ -77,6 +117,9 @@ PROMPT_SEND_NEW_MESSAGE = """{persona_text}
 【回复风格要求】
 {reply_style}
 
+【当前时间】
+{current_time_str}
+
 现在你在参与一场QQ私聊，**刚刚你已经发送了一条或多条消息**，现在请根据以下信息再发一条新消息：
 
 当前对话目标：{goals_str}
@@ -107,6 +150,9 @@ PROMPT_FAREWELL = """{persona_text}
 
 【回复风格要求】
 {reply_style}
+
+【当前时间】
+{current_time_str}
 
 你在参与一场 QQ 私聊，现在对话似乎已经结束，你决定再发一条最后的消息来圆满结束。
 
@@ -325,12 +371,16 @@ class ReplyGenerator:
         # 获取回复风格
         reply_style = self._get_reply_style()
         
+        # 获取当前时间字符串
+        current_time_str = self._get_current_time_str()
+        
         return {
             "persona_text": persona_text,
             "goals_str": goals_str,
             "knowledge_info_str": knowledge_info_str,
             "chat_history_text": chat_history_text,
-            "reply_style": reply_style
+            "reply_style": reply_style,
+            "current_time_str": current_time_str,
         }
     
     def _get_reply_style(self) -> str:
@@ -351,6 +401,34 @@ class ReplyGenerator:
         
         # 默认回复风格
         return "回复简短自然，像正常聊天一样。"
+    
+    def _get_current_time_str(self) -> str:
+        """获取当前时间的人类可读格式"""
+        import datetime
+        now = datetime.datetime.now()
+        
+        # 获取星期几
+        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        weekday = weekday_names[now.weekday()]
+        
+        # 获取时间段描述
+        hour = now.hour
+        if 5 <= hour < 9:
+            time_period = "早上"
+        elif 9 <= hour < 12:
+            time_period = "上午"
+        elif 12 <= hour < 14:
+            time_period = "中午"
+        elif 14 <= hour < 18:
+            time_period = "下午"
+        elif 18 <= hour < 22:
+            time_period = "晚上"
+        else:
+            time_period = "深夜"
+        
+        # 格式化时间字符串
+        time_str = now.strftime(f"%Y年%m月%d日 {weekday} {time_period} %H:%M")
+        return time_str
     
     def _build_goals_string(self, goal_list: Optional[List[Dict[str, Any]]]) -> str:
         """
@@ -476,12 +554,20 @@ class ReplyGenerator:
         
         return chat_history_text
     
-    def _format_messages(self, messages: List[Dict[str, Any]]) -> str:
+    def _format_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        timestamp_mode: str = "relative"
+    ) -> str:
         """
         格式化消息列表为可读文本
         
+        移植自原版 MaiM-with-u 的 build_readable_messages 函数，
+        添加相对时间显示功能，让 LLM 知道每条消息是什么时候发送的。
+        
         Args:
             messages: 消息列表
+            timestamp_mode: 时间戳显示模式，"relative" 为相对时间，"normal" 为绝对时间
             
         Returns:
             格式化的消息文本
@@ -489,19 +575,46 @@ class ReplyGenerator:
         if not messages:
             return ""
         
-        formatted_lines = []
+        formatted_blocks = []
+        
         for msg in messages:
+            # 获取发送者信息
             sender = msg.get("sender", {})
             sender_name = sender.get("nickname", "未知用户")
+            user_name = msg.get("user_name", sender_name)
+            
+            # 获取内容
             content = msg.get("processed_plain_text", msg.get("content", ""))
             
-            # 替换机器人名称
-            if sender.get("user_id") == str(global_config.bot.qq_account):
-                sender_name = self.bot_name
+            # 获取时间戳
+            timestamp = msg.get("time", time.time())
             
-            formatted_lines.append(f"{sender_name}: {content}")
+            # 替换机器人名称
+            user_id = sender.get("user_id", msg.get("user_id", ""))
+            if str(user_id) == str(global_config.bot.qq_account):
+                sender_name = f"{self.bot_name}(你)"
+            else:
+                sender_name = user_name or sender_name
+            
+            # 格式化时间
+            readable_time = translate_timestamp_to_human_readable(timestamp, mode=timestamp_mode)
+            
+            # 构建消息块（模仿原版格式）
+            header = f"{readable_time} {sender_name} 说:"
+            formatted_blocks.append(header)
+            
+            # 添加内容（带缩进）
+            if content:
+                stripped_content = content.strip()
+                if stripped_content:
+                    # 移除末尾句号，添加分号（模仿原版行为）
+                    if stripped_content.endswith("。"):
+                        stripped_content = stripped_content[:-1]
+                    formatted_blocks.append(f"{stripped_content};")
+            
+            formatted_blocks.append("")  # 空行分隔
         
-        return "\n".join(formatted_lines)
+        return "\n".join(formatted_blocks).strip()
     
     def _select_prompt_template(self, action_type: str) -> str:
         """

@@ -26,6 +26,7 @@ PFC - 行动规划器
 """
 
 import time
+import datetime
 from typing import Tuple, Optional
 
 from src.common.logger import get_logger
@@ -43,6 +44,9 @@ logger = get_logger("pfc_planner")
 
 # Prompt(1): 首次回复或非连续回复时的决策 Prompt
 PROMPT_INITIAL_REPLY = """{persona_text}。现在你在参与一场QQ私聊，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以回复，可以倾听，可以调取知识，甚至可以屏蔽对方：
+
+【当前时间】
+{current_time_str}
 
 【当前对话目标】
 {goals_str}
@@ -75,7 +79,10 @@ block_and_ignore: 更加极端的结束对话方式，直接结束对话并在�
 注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
 
 # Prompt(2): 上一次成功回复后，决定继续发言时的决策 Prompt
-PROMPT_FOLLOW_UP = """{persona_text}。现在你在参与一场QQ私聊，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识，甚至可以屏蔽对方： 
+PROMPT_FOLLOW_UP = """{persona_text}。现在你在参与一场QQ私聊，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识，甚至可以屏蔽对方：
+
+【当前时间】
+{current_time_str}
 
 【当前对话目标】
 {goals_str}
@@ -86,7 +93,7 @@ PROMPT_FOLLOW_UP = """{persona_text}。现在你在参与一场QQ私聊，刚刚
 【上一次行动的详细情况和结果】
 {last_action_context}
 【时间和超时提示】
-{time_since_last_bot_message_info}{timeout_context} 
+{time_since_last_bot_message_info}{timeout_context}
 【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
 {chat_history_text}
 
@@ -240,6 +247,9 @@ class ActionPlanner:
             prompt_template = PROMPT_INITIAL_REPLY
             logger.debug(f"[PFC][{self.user_name}] 使用 PROMPT_INITIAL_REPLY (首次/非连续回复决策)")
 
+        # 获取当前时间字符串
+        current_time_str = self._get_current_time_str()
+        
         # 格式化最终的 Prompt
         prompt = prompt_template.format(
             persona_text=persona_text,
@@ -250,6 +260,7 @@ class ActionPlanner:
             timeout_context=timeout_context,
             chat_history_text=chat_history_text if chat_history_text.strip() else "还没有聊天记录。",
             knowledge_info_str=knowledge_info_str,
+            current_time_str=current_time_str,
         )
 
         logger.debug(f"[PFC][{self.user_name}] 发送到LLM的最终提示词:\n------\n{prompt[:500]}...\n------")
@@ -392,6 +403,33 @@ class ActionPlanner:
 
         return time_since_last_bot_message_info
 
+    def _get_current_time_str(self) -> str:
+        """获取当前时间的人类可读格式"""
+        now = datetime.datetime.now()
+        
+        # 获取星期几
+        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        weekday = weekday_names[now.weekday()]
+        
+        # 获取时间段描述
+        hour = now.hour
+        if 5 <= hour < 9:
+            time_period = "早上"
+        elif 9 <= hour < 12:
+            time_period = "上午"
+        elif 12 <= hour < 14:
+            time_period = "中午"
+        elif 14 <= hour < 18:
+            time_period = "下午"
+        elif 18 <= hour < 22:
+            time_period = "晚上"
+        else:
+            time_period = "深夜"
+        
+        # 格式化时间字符串
+        time_str = now.strftime(f"%Y年%m月%d日 {weekday} {time_period} %H:%M")
+        return time_str
+
     def _get_timeout_context(self) -> str:
         """获取超时提示信息"""
         timeout_context = ""
@@ -472,37 +510,88 @@ class ActionPlanner:
     def _get_chat_history_text(self) -> str:
         """获取聊天历史文本
         
-        PFC 使用自定义的消息格式，使用简单格式化方法。
+        PFC 使用自定义的消息格式，使用相对时间格式让 LLM 理解时间上下文。
+        
+        注意：为避免消息重复，需要检查 unprocessed_messages 中的消息
+        是否已经在 chat_history 中存在。
         """
         chat_history_text = self.session.observation_info.chat_history_str
 
-        # 添加新消息
+        # 添加新消息（仅添加尚未在历史中的消息）
         new_messages_count = self.session.observation_info.new_messages_count
         if new_messages_count > 0:
             unprocessed = self.session.observation_info.unprocessed_messages
             if unprocessed:
-                new_lines = []
+                # 获取已处理消息的时间戳集合，用于去重
+                processed_times = set()
+                for msg in self.session.observation_info.chat_history:
+                    msg_time = msg.get("time")
+                    if msg_time:
+                        processed_times.add(msg_time)
+                
+                new_blocks = []
+                actual_new_count = 0
                 for msg in unprocessed:
+                    # 检查消息是否已经在历史中（通过时间戳判断）
+                    msg_time = msg.get("time", time.time())
+                    if msg_time and msg_time in processed_times:
+                        # 消息已经在历史中，跳过
+                        continue
+                    
                     content = msg.get("content", "")
                     if not content:  # 跳过空内容
                         continue
                     user_name = msg.get("user_name", "用户")
                     msg_type = msg.get("type", "")
                     
-                    # 根据消息类型格式化
+                    # 使用相对时间格式
+                    readable_time = self._translate_timestamp(msg_time)
+                    
+                    # 根据消息类型格式化（使用原版格式）
                     if msg_type == "bot_message":
-                        new_lines.append(f"{self.bot_name}: {content}")
+                        header = f"{readable_time} {self.bot_name}(你) 说:"
                     else:
-                        new_lines.append(f"{user_name}: {content}")
+                        header = f"{readable_time} {user_name} 说:"
+                    
+                    new_blocks.append(header)
+                    
+                    # 格式化内容
+                    stripped_content = content.strip()
+                    if stripped_content:
+                        if stripped_content.endswith("。"):
+                            stripped_content = stripped_content[:-1]
+                        new_blocks.append(f"{stripped_content};")
+                    
+                    new_blocks.append("")  # 空行分隔
+                    actual_new_count += 1
                 
-                if new_lines:
-                    new_messages_str = "\n".join(new_lines)
-                    chat_history_text += f"\n--- 以下是 {new_messages_count} 条新消息 ---\n{new_messages_str}"
+                if new_blocks:
+                    new_messages_str = "\n".join(new_blocks).strip()
+                    chat_history_text += f"\n--- 以下是 {actual_new_count} 条新消息 ---\n{new_messages_str}"
 
         if not chat_history_text:
             chat_history_text = "还没有聊天记录。"
 
         return chat_history_text
+    
+    def _translate_timestamp(self, timestamp: float) -> str:
+        """将时间戳转换为相对时间格式"""
+        now = time.time()
+        diff = now - timestamp
+        
+        if diff < 20:
+            return "刚刚"
+        elif diff < 60:
+            return f"{int(diff)}秒前"
+        elif diff < 3600:
+            return f"{int(diff / 60)}分钟前"
+        elif diff < 86400:
+            return f"{int(diff / 3600)}小时前"
+        elif diff < 86400 * 2:
+            return f"{int(diff / 86400)}天前"
+        else:
+            import datetime
+            return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
     def _build_action_history(self) -> Tuple[str, str]:
         """构建行动历史和上一次行动结果"""

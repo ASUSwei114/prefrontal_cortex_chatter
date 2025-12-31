@@ -32,16 +32,6 @@
 - 重构会话管理器 (SessionManager)
 - 重构对话循环 (ConversationLoop)
 
-### 新增功能
-- 添加 PFC 专属 Reply 动作
-- 支持多行回复拆分发送
-
-### Bug 修复
-- 修复聊天历史构建问题
-- 修复人格获取逻辑
-- 修复对话循环结束后新消息无法触发新循环的问题
-- 恢复原版 Prompt 模板的"简短20字以内"约束
-
 ### 可配置功能
 - 添加可配置的回复检查器（支持启用/禁用 LLM 检查）
 - 添加配置文件版本控制，支持自动更新配置结构
@@ -52,31 +42,6 @@
 - 🧠 **多种行动类型** - 支持回复、等待、倾听、获取知识等
 - ✅ **回复质量检查** - 可配置的回复质量检查，支持 LLM 深度检查
 - 📚 **知识获取** - 支持从外部获取知识辅助回复
-
-## 📁 文件结构
-
-```
-prefrontal_cortex_chatter/
-├── __init__.py          # 模块入口和导出
-├── plugin.py            # 插件注册
-├── chatter.py           # 聊天器主类
-├── planner.py           # 行动规划器
-├── replyer.py           # 回复生成器
-├── goal_analyzer.py     # 目标分析器
-├── waiter.py            # 等待器
-├── knowledge_fetcher.py # 知识获取器
-├── session.py           # 会话管理器
-├── conversation_loop.py # 对话循环
-├── models.py            # 数据模型
-├── config.py            # 配置管理
-├── utils.py             # 工具函数
-├── manifest.toml        # 插件清单
-├── LICENSE              # GPL-3.0 许可证
-├── README.md            # 本文件
-└── actions/
-    ├── __init__.py
-    └── reply.py         # PFC 专属回复动作
-```
 
 ## ⚙️ 配置说明
 
@@ -132,7 +97,7 @@ max_retries = 3             # 最大重试次数
 | `similarity_threshold` | `0.9` | 相似度阈值，超过此值判定为与上一条回复重复 |
 | `max_retries` | `3` | 回复生成的最大重试次数 |
 
-## ⚠️ **注意事项
+## ⚠️ 注意事项
 使用本插件时，请确保已在 `config/bot_config.toml` 中关闭 `[kokoro_flow_chatter]`（心流聊天器）相关配置，否则私聊将不会由本插件接管，可能导致冲突或功能异常。**
 
 ## 📄 许可证

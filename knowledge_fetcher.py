@@ -52,36 +52,42 @@ class KnowledgeFetcher:
         self.config = config
         
         # 记忆管理器（延迟初始化）
-        self._hippocampus_manager = None
+        self._memory_manager = None
         self._qa_manager = None
+        self._web_search_tool = None
         
         logger.debug(f"[私聊][{private_name}]知识获取器初始化完成")
     
     @property
-    def hippocampus_manager(self):
+    def memory_manager(self):
         """延迟加载记忆管理器"""
-        if self._hippocampus_manager is None:
+        if self._memory_manager is None:
             try:
-                from src.plugins.memory_system.Hippocampus import HippocampusManager
-                self._hippocampus_manager = HippocampusManager.get_instance()
+                from src.memory_graph.manager_singleton import get_memory_manager
+                self._memory_manager = get_memory_manager()
+                if self._memory_manager is None:
+                    logger.warning(
+                        f"[私聊][{self.private_name}]"
+                        "MemoryManager未初始化，记忆功能不可用"
+                    )
             except ImportError:
                 logger.warning(
                     f"[私聊][{self.private_name}]"
-                    "无法导入HippocampusManager，记忆功能不可用"
+                    "无法导入MemoryManager，记忆功能不可用"
                 )
             except Exception as e:
                 logger.error(
                     f"[私聊][{self.private_name}]"
-                    f"初始化HippocampusManager失败: {e}"
+                    f"获取MemoryManager失败: {e}"
                 )
-        return self._hippocampus_manager
+        return self._memory_manager
     
     @property
     def qa_manager(self):
         """延迟加载QA管理器"""
         if self._qa_manager is None:
             try:
-                from src.plugins.knowledge.knowledge_lib import qa_manager
+                from src.chat.knowledge.knowledge_lib import qa_manager
                 self._qa_manager = qa_manager
             except ImportError:
                 logger.warning(
@@ -94,6 +100,29 @@ class KnowledgeFetcher:
                     f"初始化qa_manager失败: {e}"
                 )
         return self._qa_manager
+    
+    @property
+    def web_search_tool(self):
+        """延迟加载联网搜索工具"""
+        if self._web_search_tool is None:
+            try:
+                from src.plugins.built_in.WEB_SEARCH_TOOL.tools.web_search import WebSurfingTool
+                self._web_search_tool = WebSurfingTool()
+                logger.debug(
+                    f"[私聊][{self.private_name}]"
+                    "联网搜索工具初始化成功"
+                )
+            except ImportError:
+                logger.warning(
+                    f"[私聊][{self.private_name}]"
+                    "无法导入WebSurfingTool，联网搜索功能不可用"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[私聊][{self.private_name}]"
+                    f"初始化WebSurfingTool失败: {e}"
+                )
+        return self._web_search_tool
     
     async def fetch(
         self,
@@ -136,6 +165,16 @@ class KnowledgeFetcher:
             )
             sources.append("知识库")
         
+        # 从联网搜索获取相关知识（如果启用）
+        if self.config.web_search.enabled:
+            web_knowledge = await self._fetch_from_web_search(query)
+            if web_knowledge:
+                knowledge_parts.append(
+                    f"\n现在有以下**联网搜索结果**可供参考：\n{web_knowledge}\n"
+                    "请参考这些最新信息回答问题。\n"
+                )
+                sources.append("联网搜索")
+        
         # 组合知识
         if knowledge_parts:
             knowledge_text = "\n".join(knowledge_parts)
@@ -166,29 +205,30 @@ class KnowledgeFetcher:
         Returns:
             (知识文本, 来源列表) 元组
         """
-        if not self.hippocampus_manager:
+        if not self.memory_manager:
             return "", []
         
         try:
-            related_memory = await self.hippocampus_manager.get_memory_from_text(
-                text=f"{query}\n{chat_history_text}",
-                max_memory_num=3,
-                max_memory_length=2,
-                max_depth=3,
-                fast_retrieval=False,
+            # 使用 MoFox_Bot 的 MemoryManager.search_memories
+            search_query = f"{query}\n{chat_history_text}"
+            memories = await self.memory_manager.search_memories(
+                query=search_query,
+                top_k=3,
+                min_importance=0.0,
+                include_forgotten=False,
             )
             
-            if not related_memory:
+            if not memories:
                 return "", []
             
             knowledge_parts = []
             sources = []
             
-            for memory in related_memory:
-                memory_id = memory[0]
-                memory_content = memory[1]
-                knowledge_parts.append(memory_content)
-                sources.append(f"记忆片段{memory_id}")
+            for memory in memories:
+                # Memory 对象有 to_text() 方法
+                memory_text = memory.to_text()
+                knowledge_parts.append(memory_text)
+                sources.append(f"记忆片段{memory.id[:8]}")
             
             knowledge_text = "\n".join(knowledge_parts)
             return knowledge_text, sources
@@ -226,6 +266,56 @@ class KnowledgeFetcher:
                 f"[私聊][{self.private_name}]LPMM知识库搜索工具执行失败: {e}"
             )
             return "未找到匹配的知识"
+    
+    async def _fetch_from_web_search(self, query: str) -> str:
+        """
+        从联网搜索获取相关知识
+        
+        Args:
+            query: 查询内容
+            
+        Returns:
+            搜索结果文本
+        """
+        if not self.web_search_tool:
+            return ""
+        
+        logger.debug(f"[私聊][{self.private_name}]正在进行联网搜索: {query[:50]}...")
+        
+        try:
+            # 构建搜索参数
+            search_args = {
+                "query": query,
+                "num_results": self.config.web_search.num_results,
+                "time_range": self.config.web_search.time_range,
+                "answer_mode": self.config.web_search.answer_mode,
+            }
+            
+            # 执行搜索
+            result = await self.web_search_tool.execute(search_args)
+            
+            if "error" in result:
+                logger.warning(
+                    f"[私聊][{self.private_name}]联网搜索失败: {result['error']}"
+                )
+                return ""
+            
+            # 获取搜索结果内容
+            content = result.get("content", "")
+            if content:
+                logger.debug(
+                    f"[私聊][{self.private_name}]联网搜索成功，"
+                    f"结果长度: {len(content)}"
+                )
+                return content
+            
+            return ""
+            
+        except Exception as e:
+            logger.error(
+                f"[私聊][{self.private_name}]联网搜索执行失败: {e}"
+            )
+            return ""
     
     def _format_chat_history(
         self,
@@ -272,22 +362,21 @@ class KnowledgeFetcher:
         results = []
         
         # 从记忆获取
-        if self.hippocampus_manager:
+        if self.memory_manager:
             try:
-                memories = await self.hippocampus_manager.get_memory_from_text(
-                    text=f"{query}\n{context}",
-                    max_memory_num=max_results,
-                    max_memory_length=2,
-                    max_depth=3,
-                    fast_retrieval=True,
+                memories = await self.memory_manager.search_memories(
+                    query=f"{query}\n{context}",
+                    top_k=max_results,
+                    min_importance=0.0,
+                    include_forgotten=False,
                 )
                 
                 for memory in memories or []:
                     results.append({
                         "type": "memory",
-                        "id": memory[0],
-                        "content": memory[1],
-                        "source": f"记忆片段{memory[0]}"
+                        "id": memory.id,
+                        "content": memory.to_text(),
+                        "source": f"记忆片段{memory.id[:8]}"
                     })
             except Exception as e:
                 logger.error(f"[私聊][{self.private_name}]获取记忆失败: {e}")
@@ -305,6 +394,20 @@ class KnowledgeFetcher:
                     })
             except Exception as e:
                 logger.error(f"[私聊][{self.private_name}]获取知识库失败: {e}")
+        
+        # 从联网搜索获取
+        if self.config.web_search.enabled and len(results) < max_results:
+            try:
+                web_result = await self._fetch_from_web_search(query)
+                if web_result:
+                    results.append({
+                        "type": "web_search",
+                        "id": "web_0",
+                        "content": web_result,
+                        "source": "联网搜索"
+                    })
+            except Exception as e:
+                logger.error(f"[私聊][{self.private_name}]获取联网搜索失败: {e}")
         
         return results[:max_results]
     

@@ -389,15 +389,62 @@ class ConversationLoop:
             logger.error(f"[PFC][{self.user_name}] 发送回复失败: {e}")
     
     async def _handle_fetch_knowledge(self, query: str, action_index: int) -> bool:
-        """处理获取知识"""
+        """
+        处理获取知识
+        
+        调用 KnowledgeFetcher 从记忆系统和知识库中获取相关知识，
+        并将结果存储到 conversation_info.knowledge_list 中。
+        """
         self.session.state = ConversationState.FETCHING
         
         try:
-            # TODO: 实现知识获取
-            logger.info(f"[PFC][{self.user_name}] 获取知识: {query}")
+            from .knowledge_fetcher import KnowledgeFetcher
+            
+            logger.info(f"[PFC][{self.user_name}] 开始获取知识: {query[:100]}...")
+            
+            # 创建知识获取器
+            fetcher = KnowledgeFetcher(self.user_name, self.config)
+            
+            # 获取知识
+            knowledge_text, sources_text = await fetcher.fetch(
+                query=query,
+                chat_history=self.session.observation_info.chat_history
+            )
+            
+            # 将获取的知识添加到 knowledge_list
+            if knowledge_text and knowledge_text != "未找到相关知识":
+                knowledge_item = {
+                    "query": query[:200],  # 截断过长的查询
+                    "knowledge": knowledge_text,
+                    "source": sources_text,
+                    "time": time.time(),
+                }
+                
+                # 初始化 knowledge_list（如果不存在）
+                if not hasattr(self.session.conversation_info, 'knowledge_list') or \
+                   self.session.conversation_info.knowledge_list is None:
+                    self.session.conversation_info.knowledge_list = []
+                
+                self.session.conversation_info.knowledge_list.append(knowledge_item)
+                
+                # 限制知识列表长度（最多保留10条）
+                if len(self.session.conversation_info.knowledge_list) > 10:
+                    self.session.conversation_info.knowledge_list = \
+                        self.session.conversation_info.knowledge_list[-10:]
+                
+                logger.info(
+                    f"[PFC][{self.user_name}] 成功获取知识: "
+                    f"{knowledge_text[:100]}... (来源: {sources_text})"
+                )
+            else:
+                logger.info(f"[PFC][{self.user_name}] 未找到相关知识")
+            
             return True
+            
         except Exception as e:
             logger.error(f"[PFC][{self.user_name}] 获取知识失败: {e}")
+            import traceback
+            traceback.print_exc()
             self.session.conversation_info.done_action[action_index].update({
                 "status": "recall",
                 "final_reason": f"获取知识失败: {e}"
@@ -425,9 +472,28 @@ class ConversationLoop:
         """处理倾听"""
         self.session.state = ConversationState.LISTENING
         
-        # 短暂等待
-        await asyncio.sleep(5)
+        # 使用 waiter 进行真正的倾听等待（等待新消息或超时）
+        await self._do_wait_listening()
         return True
+    
+    async def _do_wait_listening(self):
+        """执行倾听等待"""
+        from .waiter import Waiter
+        from .config import get_config
+        
+        config = get_config()
+        
+        async def check_new_message(since_time: float) -> bool:
+            """检查是否有新消息"""
+            return self.session.observation_info.new_messages_count > 0
+        
+        waiter = Waiter(
+            self.session.stream_id,
+            self.user_name,
+            config,
+            new_message_checker=check_new_message
+        )
+        await waiter.wait_listening(self.session.conversation_info)
     
     async def _handle_wait(self, action_index: int) -> bool:
         """处理等待"""

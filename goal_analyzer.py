@@ -25,6 +25,7 @@ PFC目标分析器模块
 负责分析对话历史并设定/更新对话目标
 """
 
+import datetime
 from typing import List, Tuple, Optional, Dict, Any
 from src.common.logger import get_logger
 from src.plugin_system.apis import llm_api
@@ -42,6 +43,9 @@ logger = get_logger("PFC-GoalAnalyzer")
 
 PROMPT_ANALYZE_GOAL = """{persona_text}。现在你在参与一场QQ聊天，请分析以下聊天记录，并根据你的性格特征确定多个明确的对话目标。
 这些目标应该反映出对话的不同方面和意图。
+
+【当前时间】
+{current_time_str}
 
 {action_history_text}
 当前对话目标：
@@ -74,6 +78,10 @@ PROMPT_ANALYZE_GOAL = """{persona_text}。现在你在参与一场QQ聊天，请
 ]"""
 
 PROMPT_ANALYZE_CONVERSATION = """{persona_text}。现在你在参与一场QQ聊天，
+
+【当前时间】
+{current_time_str}
+
 当前对话目标：{goal}
 产生该对话目标的原因：{reasoning}
 
@@ -302,12 +310,48 @@ class GoalAnalyzer:
             conversation_info.done_action
         )
         
+        # 获取当前时间字符串
+        current_time_str = self._get_current_time_str()
+        
         return {
             "persona_text": persona_text,
             "goals_str": goals_str,
             "chat_history_text": chat_history_text,
-            "action_history_text": action_history_text
+            "action_history_text": action_history_text,
+            "current_time_str": current_time_str
         }
+    
+    def _get_current_time_str(self) -> str:
+        """
+        获取当前时间的人类可读格式
+        
+        Returns:
+            格式化的时间字符串，如 "2025年12月23日 星期一 中午 12:21"
+        """
+        now = datetime.datetime.now()
+        
+        # 星期几
+        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        weekday = weekday_names[now.weekday()]
+        
+        # 时间段
+        hour = now.hour
+        if 5 <= hour < 9:
+            time_period = "早上"
+        elif 9 <= hour < 12:
+            time_period = "上午"
+        elif 12 <= hour < 14:
+            time_period = "中午"
+        elif 14 <= hour < 18:
+            time_period = "下午"
+        elif 18 <= hour < 22:
+            time_period = "晚上"
+        else:
+            time_period = "深夜"
+        
+        # 格式化时间字符串
+        time_str = now.strftime(f"%Y年%m月%d日 {weekday} {time_period} %H:%M")
+        return time_str
     
     def _build_goals_string(
         self,
@@ -495,12 +539,14 @@ class GoalAnalyzer:
             (goal_achieved, stop_conversation, reason) 元组
         """
         persona_text = f"你的名字是{self.bot_name}，{self.personality_info}。"
+        current_time_str = self._get_current_time_str()
         
         prompt = PROMPT_ANALYZE_CONVERSATION.format(
             persona_text=persona_text,
             goal=goal,
             reasoning=reasoning,
-            chat_history_text=chat_history_text
+            chat_history_text=chat_history_text,
+            current_time_str=current_time_str
         )
         
         try:

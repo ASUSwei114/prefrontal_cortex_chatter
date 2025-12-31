@@ -36,6 +36,15 @@ class ReplyCheckerConfig:
 
 
 @dataclass
+class WebSearchConfig:
+    """联网搜索配置"""
+    enabled: bool = True                  # 是否启用联网搜索
+    num_results: int = 3                  # 搜索结果数量
+    time_range: str = "any"               # 时间范围: any, week, month
+    answer_mode: bool = False             # 是否启用答案模式（仅Exa引擎）
+
+
+@dataclass
 class WaitingConfig:
     """等待配置"""
     default_max_wait_seconds: int = 300  # 默认等待超时时间（秒）
@@ -46,7 +55,8 @@ class WaitingConfig:
 @dataclass
 class SessionConfig:
     """会话配置"""
-    session_dir: str = "prefrontal_cortex_chatter/sessions"
+    storage_backend: str = "file"  # 存储后端: "file"(JSON文件) 或 "database"(数据库)
+    session_dir: str = "prefrontal_cortex_chatter/sessions"  # 仅 file 后端使用
     session_expire_seconds: int = 86400 * 7  # 7 天
     max_history_entries: int = 100
 
@@ -59,6 +69,7 @@ class PFCConfig:
     waiting: WaitingConfig = field(default_factory=WaitingConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
     reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)
+    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
 
 
 # 全局配置单例
@@ -125,6 +136,7 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
         if "session" in cfg:
             sess_cfg = cfg["session"]
             config.session = SessionConfig(
+                storage_backend=sess_cfg.get("storage_backend", "file"),
                 session_dir=sess_cfg.get("session_dir", "prefrontal_cortex_chatter/sessions"),
                 session_expire_seconds=sess_cfg.get("session_expire_seconds", 86400 * 7),
                 max_history_entries=sess_cfg.get("max_history_entries", 100),
@@ -138,6 +150,16 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
                 use_llm_check=checker_cfg.get("use_llm_check", True),
                 similarity_threshold=checker_cfg.get("similarity_threshold", 0.9),
                 max_retries=checker_cfg.get("max_retries", 3),
+            )
+
+        # 联网搜索配置
+        if "web_search" in cfg:
+            ws_cfg = cfg["web_search"]
+            config.web_search = WebSearchConfig(
+                enabled=ws_cfg.get("enabled", True),
+                num_results=ws_cfg.get("num_results", 3),
+                time_range=ws_cfg.get("time_range", "any"),
+                answer_mode=ws_cfg.get("answer_mode", False),
             )
 
     except Exception as e:
@@ -182,6 +204,7 @@ def _load_from_global_config() -> PFCConfig:
             if hasattr(pfc_cfg, "session"):
                 sess_cfg = pfc_cfg.session
                 config.session = SessionConfig(
+                    storage_backend=getattr(sess_cfg, "storage_backend", "file"),
                     session_dir=getattr(sess_cfg, "session_dir", "prefrontal_cortex_chatter/sessions"),
                     session_expire_seconds=getattr(sess_cfg, "session_expire_seconds", 86400 * 7),
                     max_history_entries=getattr(sess_cfg, "max_history_entries", 100),
@@ -195,6 +218,16 @@ def _load_from_global_config() -> PFCConfig:
                     use_llm_check=getattr(checker_cfg, "use_llm_check", True),
                     similarity_threshold=getattr(checker_cfg, "similarity_threshold", 0.9),
                     max_retries=getattr(checker_cfg, "max_retries", 3),
+                )
+
+            # 联网搜索配置
+            if hasattr(pfc_cfg, "web_search"):
+                ws_cfg = pfc_cfg.web_search
+                config.web_search = WebSearchConfig(
+                    enabled=getattr(ws_cfg, "enabled", True),
+                    num_results=getattr(ws_cfg, "num_results", 3),
+                    time_range=getattr(ws_cfg, "time_range", "any"),
+                    answer_mode=getattr(ws_cfg, "answer_mode", False),
                 )
 
     except Exception as e:

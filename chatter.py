@@ -283,26 +283,49 @@ class PrefrontalCortexChatter(BaseChatter):
             traceback.print_exc()
 
     async def _build_chat_history_str(self, session: PFCSession, user_name: str) -> None:
-        """构建聊天历史字符串"""
-        lines = []
+        """
+        构建聊天历史字符串
+        
+        使用相对时间格式（如"刚刚"、"5分钟前"），与原版 MaiM-with-u 保持一致，
+        让 LLM 能够理解消息的时间上下文。
+        """
+        from .replyer import translate_timestamp_to_human_readable
+        from src.config.config import global_config
+        
+        formatted_blocks = []
+        bot_name = global_config.bot.nickname if global_config else "Bot"
 
         # 历史消息
         for msg in session.observation_info.chat_history[-30:]:
             msg_type = msg.get("type", "")
             content = msg.get("content", "")
-            msg_time = msg.get("time", 0)
+            msg_time = msg.get("time", time.time())
 
-            time_str = datetime.datetime.fromtimestamp(msg_time).strftime("%H:%M:%S") if msg_time else ""
+            # 使用相对时间格式
+            readable_time = translate_timestamp_to_human_readable(msg_time, mode="relative")
 
             if msg_type == "user_message":
                 sender = msg.get("user_name", user_name)
-                lines.append(f"[{time_str}] {sender}: {content}")
+                header = f"{readable_time} {sender} 说:"
             elif msg_type == "bot_message":
-                from src.config.config import global_config
-                bot_name = global_config.bot.nickname if global_config else "Bot"
-                lines.append(f"[{time_str}] {bot_name}: {content}")
+                header = f"{readable_time} {bot_name}(你) 说:"
+            else:
+                continue
+            
+            formatted_blocks.append(header)
+            
+            # 添加内容
+            if content:
+                stripped_content = content.strip()
+                if stripped_content:
+                    # 移除末尾句号，添加分号（模仿原版行为）
+                    if stripped_content.endswith("。"):
+                        stripped_content = stripped_content[:-1]
+                    formatted_blocks.append(f"{stripped_content};")
+            
+            formatted_blocks.append("")  # 空行分隔
 
-        session.observation_info.chat_history_str = "\n".join(lines)
+        session.observation_info.chat_history_str = "\n".join(formatted_blocks).strip()
 
     def _build_result(
         self,

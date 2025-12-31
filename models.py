@@ -193,7 +193,7 @@ class ObservationInfo:
     async def clear_unprocessed_messages(self, bot_name: str = "Bot") -> None:
         """清理未处理消息，将其合并到历史并更新历史字符串
         
-        PFC 使用自定义的消息格式，直接使用简单拼接来构建聊天历史字符串。
+        PFC 使用自定义的消息格式，使用相对时间格式让 LLM 理解时间上下文。
         """
         if not self.unprocessed_messages:
             return
@@ -204,31 +204,64 @@ class ObservationInfo:
         if len(self.chat_history) > max_history_len:
             self.chat_history = self.chat_history[-max_history_len:]
         
-        # 使用简单拼接构建历史字符串
+        # 使用带时间的格式构建历史字符串
         # 只使用最近一部分生成，例如20条
         history_slice_for_str = self.chat_history[-20:]
         
         from src.config.config import global_config
         actual_bot_name = global_config.bot.nickname if global_config else bot_name
         
-        new_lines = []
+        new_blocks = []
         for msg in history_slice_for_str:
+            msg_time = msg.get("time", time.time())
+            readable_time = self._translate_timestamp(msg_time)
+            content = msg.get("content", "")
+            
+            if not content:  # 跳过空内容
+                continue
+            
+            # 格式化内容
+            stripped_content = content.strip()
+            if stripped_content.endswith("。"):
+                stripped_content = stripped_content[:-1]
+            
             if msg.get("type") == "user_message":
                 sender_name = msg.get("user_name", "用户")
-                content = msg.get("content", "")
-                if content:  # 只添加有内容的消息
-                    new_lines.append(f"{sender_name}: {content}")
+                header = f"{readable_time} {sender_name} 说:"
             elif msg.get("type") == "bot_message":
-                content = msg.get("content", "")
-                if content:  # 只添加有内容的消息
-                    new_lines.append(f"{actual_bot_name}: {content}")
+                header = f"{readable_time} {actual_bot_name}(你) 说:"
+            else:
+                continue
+            
+            new_blocks.append(header)
+            new_blocks.append(f"{stripped_content};")
+            new_blocks.append("")  # 空行分隔
         
-        self.chat_history_str = "\n".join(new_lines)
+        self.chat_history_str = "\n".join(new_blocks).strip()
         
         # 清空未处理消息列表和计数
         self.unprocessed_messages = []
         self.new_messages_count = 0
         self.chat_history_count = len(self.chat_history)
+    
+    def _translate_timestamp(self, timestamp: float) -> str:
+        """将时间戳转换为相对时间格式"""
+        now = time.time()
+        diff = now - timestamp
+        
+        if diff < 20:
+            return "刚刚"
+        elif diff < 60:
+            return f"{int(diff)}秒前"
+        elif diff < 3600:
+            return f"{int(diff / 60)}分钟前"
+        elif diff < 86400:
+            return f"{int(diff / 3600)}小时前"
+        elif diff < 86400 * 2:
+            return f"{int(diff / 86400)}天前"
+        else:
+            import datetime
+            return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass
