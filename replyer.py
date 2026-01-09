@@ -813,6 +813,7 @@ class ReplyChecker:
         """
         # 如果检查器被禁用，直接返回通过
         if not self.checker_config.enabled:
+            logger.debug(f"[私聊][{self.private_name}]回复检查器已禁用，直接通过")
             return True, "检查器已禁用，直接通过", False
         
         # 基本检查

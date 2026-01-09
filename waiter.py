@@ -19,6 +19,7 @@ PFC等待器模块
 
 负责处理等待用户消息和超时逻辑
 """
+from __future__ import annotations
 
 import time
 import asyncio

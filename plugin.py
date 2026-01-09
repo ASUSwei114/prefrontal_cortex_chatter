@@ -22,6 +22,7 @@ Prefrontal Cortex Chatter - 插件注册与配置
 ================================================================================
 """
 
+import sys
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, TYPE_CHECKING
 
@@ -90,36 +91,42 @@ class PFCConfig:
         return ["private"]
 
 
-# 全局配置单例
-_config: PFCConfig | None = None
-_plugin_config: dict[str, Any] | None = None
+# 全局配置单例 - 使用 sys.modules 确保跨模块实例共享
+# 由于插件管理器使用 spec_from_file_location 加载模块，可能导致模块被多次实例化
+# 使用 sys.modules 中的特殊键来存储配置，确保所有导入都共享同一份配置
+_CONFIG_KEY = "_pfc_plugin_config_holder"
+
+def _get_config_holder() -> dict[str, Any]:
+    """获取全局配置持有者字典"""
+    if _CONFIG_KEY not in sys.modules:
+        sys.modules[_CONFIG_KEY] = {"config": None, "plugin_config": None}  # type: ignore
+    return sys.modules[_CONFIG_KEY]  # type: ignore
 
 
 def set_plugin_config(config_dict: dict[str, Any]) -> None:
     """设置插件配置（由插件调用）"""
-    global _plugin_config, _config
-    _plugin_config = config_dict
-    _config = None
+    holder = _get_config_holder()
+    holder["plugin_config"] = config_dict
+    holder["config"] = None  # 重置缓存，下次获取时重新加载
+    logger.info("[PFC] set_plugin_config: 已设置插件配置")
 
 
 def get_config() -> PFCConfig:
     """获取全局配置"""
-    global _config
-    if _config is None:
-        _config = _load_config()
-    return _config
+    holder = _get_config_holder()
+    if holder["config"] is None:
+        holder["config"] = _load_config()
+    return holder["config"]
 
 
 def _load_config() -> PFCConfig:
     """加载 PFC 配置"""
-    config = PFCConfig()
+    holder = _get_config_holder()
     
-    if _plugin_config:
-        config = _load_from_plugin_config(_plugin_config)
+    if holder["plugin_config"]:
+        return _load_from_plugin_config(holder["plugin_config"])
     else:
-        config = _load_from_global_config()
-    
-    return config
+        return _load_from_global_config()
 
 
 def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
@@ -232,9 +239,9 @@ def _load_from_global_config() -> PFCConfig:
 
 def reload_config() -> PFCConfig:
     """重新加载配置"""
-    global _config
-    _config = _load_config()
-    return _config
+    holder = _get_config_holder()
+    holder["config"] = _load_config()
+    return holder["config"]
 
 
 # ============================================================================
