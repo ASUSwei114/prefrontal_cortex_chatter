@@ -772,7 +772,7 @@ class ReplyChecker:
         self,
         stream_id: str,
         private_name: str,
-        config: PFCConfig
+        config: "PFCConfig"
     ):
         """
         初始化回复检查器
