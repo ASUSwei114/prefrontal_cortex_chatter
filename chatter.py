@@ -180,7 +180,7 @@ class PrefrontalCortexChatter(BaseChatter):
                 # 11. 更新统计
                 self._stats["messages_processed"] += len(unread_messages)
 
-                logger.info(
+                logger.debug(
                     f"[PFC] 消息已记录，会话循环运行中: user={user_name}, "
                     f"new_messages={len(unread_messages)}"
                 )

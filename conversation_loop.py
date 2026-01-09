@@ -84,7 +84,7 @@ class ConversationLoop:
         """
         PFC核心循环 - 复刻原版 _plan_and_action_loop
         """
-        logger.info(f"[PFC][{self.user_name}] 循环开始: _running={self._running}, should_continue={self.session.should_continue}")
+        logger.debug(f"[PFC][{self.user_name}] 循环开始: _running={self._running}, should_continue={self.session.should_continue}")
         
         while self._running and self.session.should_continue:
             # 忽略逻辑
@@ -589,7 +589,7 @@ class ConversationLoopManager:
                     return loop
                 else:
                     # 循环已停止，需要清理并创建新循环
-                    logger.info(f"[PFC][{user_name}] 旧循环已停止，创建新循环")
+                    logger.debug(f"[PFC][{user_name}] 旧循环已停止，创建新循环")
                     del self._loops[user_id]
             
             # 创建新循环
@@ -597,7 +597,7 @@ class ConversationLoopManager:
             self._loops[user_id] = loop
             await loop.start()
             
-            logger.info(f"[PFC][{user_name}] 新会话循环已创建并启动")
+            logger.debug(f"[PFC][{user_name}] 新会话循环已创建并启动")
             return loop
     
     async def stop_loop(self, user_id: str):
