@@ -543,10 +543,11 @@ class ConversationLoop:
     
     async def _handle_block_and_ignore(self, action_index: int) -> bool:
         """处理屏蔽和忽略"""
-        # 设置忽略时间（30分钟）
-        self.session.ignore_until_timestamp = time.time() + 1800
+        # 从配置获取屏蔽忽略时间
+        block_seconds = self.config.waiting.block_ignore_seconds
+        self.session.ignore_until_timestamp = time.time() + block_seconds
         self.session.should_continue = False
-        logger.info(f"[PFC][{self.user_name}] 已屏蔽，30分钟内忽略")
+        logger.info(f"[PFC][{self.user_name}] 已屏蔽，{block_seconds // 60}分钟内忽略")
         return True
 
 

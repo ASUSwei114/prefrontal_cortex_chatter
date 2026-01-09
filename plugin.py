@@ -52,7 +52,7 @@ class PFCReplyAction(_PFCReplyAction):
 
 
 # 配置文件版本号 - 更新配置结构时递增此版本
-CONFIG_VERSION = "1.0.1"
+CONFIG_VERSION = "1.2.0"
 
 
 @register_plugin
@@ -121,6 +121,11 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 default=1800,
                 description="允许的最长等待时间（秒，30分钟）",
             ),
+            "block_ignore_seconds": ConfigField(
+                type=int,
+                default=1800,
+                description="屏蔽忽略时间（秒，默认30分钟）- 执行 block_and_ignore 动作后忽略对方消息的时长",
+            ),
         },
         "session": {
             "storage_backend": ConfigField(
@@ -142,6 +147,11 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 type=int,
                 default=100,
                 description="最大历史记录条数",
+            ),
+            "initial_history_limit": ConfigField(
+                type=int,
+                default=30,
+                description="从数据库加载的初始历史消息条数（启动时加载）",
             ),
         },
         "reply_checker": {

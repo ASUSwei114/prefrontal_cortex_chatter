@@ -57,7 +57,7 @@ PROMPT_INITIAL_REPLY = """{persona_text}。现在你在参与一场QQ私聊，�
 【上一次行动的详细情况和结果】
 {last_action_context}
 【时间和超时提示】
-{time_since_last_bot_message_info}{timeout_context}
+{time_info}{time_since_last_bot_message_info}{timeout_context}
 【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
 {chat_history_text}
 
@@ -93,7 +93,7 @@ PROMPT_FOLLOW_UP = """{persona_text}。现在你在参与一场QQ私聊，刚刚
 【上一次行动的详细情况和结果】
 {last_action_context}
 【时间和超时提示】
-{time_since_last_bot_message_info}{timeout_context}
+{time_info}{time_since_last_bot_message_info}{timeout_context}
 【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
 {chat_history_text}
 
@@ -250,12 +250,16 @@ class ActionPlanner:
         # 获取当前时间字符串
         current_time_str = self._get_current_time_str()
         
+        # 获取时间信息（与原版 ChatObserver.get_time_info() 保持一致）
+        time_info = self.session.get_time_info()
+        
         # 格式化最终的 Prompt
         prompt = prompt_template.format(
             persona_text=persona_text,
             goals_str=goals_str if goals_str.strip() else "- 目前没有明确对话目标，请考虑设定一个。",
             action_history_summary=action_history_summary,
             last_action_context=last_action_context,
+            time_info=time_info,
             time_since_last_bot_message_info=time_since_last_bot_message_info,
             timeout_context=timeout_context,
             chat_history_text=chat_history_text if chat_history_text.strip() else "还没有聊天记录。",

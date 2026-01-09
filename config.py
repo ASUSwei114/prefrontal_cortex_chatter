@@ -50,6 +50,7 @@ class WaitingConfig:
     default_max_wait_seconds: int = 300  # 默认等待超时时间（秒）
     min_wait_seconds: int = 30           # 允许的最短等待时间
     max_wait_seconds: int = 1800         # 允许的最长等待时间（30分钟）
+    block_ignore_seconds: int = 1800     # 屏蔽忽略时间（秒，默认30分钟）
 
 
 @dataclass
@@ -59,6 +60,7 @@ class SessionConfig:
     session_dir: str = "prefrontal_cortex_chatter/sessions"  # 仅 file 后端使用
     session_expire_seconds: int = 86400 * 7  # 7 天
     max_history_entries: int = 100
+    initial_history_limit: int = 30  # 从数据库加载的初始历史消息条数
 
 
 @dataclass
@@ -130,6 +132,7 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
                 default_max_wait_seconds=wait_cfg.get("default_max_wait_seconds", 300),
                 min_wait_seconds=wait_cfg.get("min_wait_seconds", 30),
                 max_wait_seconds=wait_cfg.get("max_wait_seconds", 1800),
+                block_ignore_seconds=wait_cfg.get("block_ignore_seconds", 1800),
             )
 
         # 会话配置
@@ -140,6 +143,7 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
                 session_dir=sess_cfg.get("session_dir", "prefrontal_cortex_chatter/sessions"),
                 session_expire_seconds=sess_cfg.get("session_expire_seconds", 86400 * 7),
                 max_history_entries=sess_cfg.get("max_history_entries", 100),
+                initial_history_limit=sess_cfg.get("initial_history_limit", 30),
             )
 
         # 回复检查器配置
@@ -198,6 +202,7 @@ def _load_from_global_config() -> PFCConfig:
                     default_max_wait_seconds=getattr(wait_cfg, "default_max_wait_seconds", 300),
                     min_wait_seconds=getattr(wait_cfg, "min_wait_seconds", 30),
                     max_wait_seconds=getattr(wait_cfg, "max_wait_seconds", 1800),
+                    block_ignore_seconds=getattr(wait_cfg, "block_ignore_seconds", 1800),
                 )
 
             # 会话配置
@@ -208,6 +213,7 @@ def _load_from_global_config() -> PFCConfig:
                     session_dir=getattr(sess_cfg, "session_dir", "prefrontal_cortex_chatter/sessions"),
                     session_expire_seconds=getattr(sess_cfg, "session_expire_seconds", 86400 * 7),
                     max_history_entries=getattr(sess_cfg, "max_history_entries", 100),
+                    initial_history_limit=getattr(sess_cfg, "initial_history_limit", 30),
                 )
 
             # 回复检查器配置

@@ -97,6 +97,10 @@ class PFCSession:
 
         # 用户最后发消息的时间
         self.last_user_message_at: float | None = None
+        
+        # 发言时间跟踪（与原版 ChatObserver 保持一致）
+        self.last_bot_speak_time: float | None = None  # 机器人上次发言时间
+        self.last_user_speak_time: float | None = None  # 用户上次发言时间
 
         # 生成的回复（临时存储）
         self.generated_reply: str = ""
@@ -147,6 +151,9 @@ class PFCSession:
         # 重置连续超时计数
         self.consecutive_timeout_count = 0
         self.last_user_message_at = msg_time
+        
+        # 更新用户发言时间（与原版 ChatObserver 保持一致）
+        self.last_user_speak_time = msg_time
         
         # 清除超时相关的目标（用户发消息了，说明对话还在继续）
         self._clear_timeout_goals()
@@ -216,6 +223,9 @@ class PFCSession:
         self.observation_info.chat_history.append(msg_dict)
         self.observation_info.chat_history_count += 1
         
+        # 更新机器人发言时间（与原版 ChatObserver 保持一致）
+        self.last_bot_speak_time = msg_time
+        
         # 同时更新 chat_history_str，使用相对时间格式
         bot_name = global_config.bot.nickname if global_config else "Bot"
         readable_time = self._translate_timestamp(msg_time)
@@ -252,6 +262,31 @@ class PFCSession:
             return f"{int(diff / 86400)}天前"
         else:
             return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+    
+    def get_time_info(self) -> str:
+        """
+        获取时间信息文本
+        
+        与原版 MaiM-with-u 的 ChatObserver.get_time_info() 保持一致，
+        返回格式为：
+        - "距离你上次发言已经过去了X秒"
+        - "距离对方上次发言已经过去了X秒"
+        
+        Returns:
+            时间信息文本
+        """
+        current_time = time.time()
+        time_info = ""
+        
+        if self.last_bot_speak_time:
+            bot_speak_ago = current_time - self.last_bot_speak_time
+            time_info += f"\n距离你上次发言已经过去了{int(bot_speak_ago)}秒"
+        
+        if self.last_user_speak_time:
+            user_speak_ago = current_time - self.last_user_speak_time
+            time_info += f"\n距离对方上次发言已经过去了{int(user_speak_ago)}秒"
+        
+        return time_info
 
     def _trim_history(self) -> None:
         """裁剪历史记录"""
@@ -364,6 +399,8 @@ class PFCSession:
             "last_proactive_at": self.last_proactive_at,
             "consecutive_timeout_count": self.consecutive_timeout_count,
             "last_user_message_at": self.last_user_message_at,
+            "last_bot_speak_time": self.last_bot_speak_time,
+            "last_user_speak_time": self.last_user_speak_time,
         }
 
     @classmethod
@@ -406,6 +443,8 @@ class PFCSession:
         session.last_proactive_at = data.get("last_proactive_at")
         session.consecutive_timeout_count = data.get("consecutive_timeout_count", 0)
         session.last_user_message_at = data.get("last_user_message_at")
+        session.last_bot_speak_time = data.get("last_bot_speak_time")
+        session.last_user_speak_time = data.get("last_user_speak_time")
 
         return session
 

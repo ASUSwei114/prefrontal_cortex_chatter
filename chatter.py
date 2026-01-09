@@ -214,13 +214,15 @@ class PrefrontalCortexChatter(BaseChatter):
             
             bot_qq = str(global_config.bot.qq_account) if global_config else ""
             
-            logger.info(f"[PFC] 为 {self.stream_id} 加载初始聊天记录...")
+            # 从配置获取加载条数
+            history_limit = self._config.session.initial_history_limit
+            logger.info(f"[PFC] 为 {self.stream_id} 加载初始聊天记录 (limit={history_limit})...")
             
-            # 从数据库加载最近30条消息
+            # 从数据库加载消息
             initial_messages = await get_raw_msg_before_timestamp_with_chat(
                 chat_id=self.stream_id,
                 timestamp=time.time(),
-                limit=30,
+                limit=history_limit,
             )
             
             if initial_messages:
@@ -251,6 +253,9 @@ class PrefrontalCortexChatter(BaseChatter):
                             "content": content,
                             "time": msg_time,
                         })
+                        # 更新机器人发言时间（与原版 ChatObserver 保持一致）
+                        if msg_time and (session.last_bot_speak_time is None or msg_time > session.last_bot_speak_time):
+                            session.last_bot_speak_time = msg_time
                     else:
                         # 用户消息
                         session.observation_info.chat_history.append({
@@ -260,6 +265,9 @@ class PrefrontalCortexChatter(BaseChatter):
                             "user_id": sender_id,
                             "time": msg_time,
                         })
+                        # 更新用户发言时间（与原版 ChatObserver 保持一致）
+                        if msg_time and (session.last_user_speak_time is None or msg_time > session.last_user_speak_time):
+                            session.last_user_speak_time = msg_time
                 
                 session.observation_info.chat_history_str = chat_history_str + "\n"
                 session.observation_info.chat_history_count = len(initial_messages)
