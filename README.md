@@ -24,7 +24,6 @@
 
 ### 架构适配
 - 适配 MoFox_Bot 的插件系统架构
-- 重构为独立插件模块，支持热插拔
 - 使用 MoFox_Bot 的配置系统和日志系统
 
 ### 功能重构
@@ -47,45 +46,86 @@
 
 配置文件位于 `config/plugins/prefrontal_cortex_chatter/config.toml`。
 
-### 配置文件版本控制
-
-插件使用 `inner.version` 字段进行配置文件版本控制。当插件更新导致配置结构变化时：
-- MoFox 会自动检测版本差异
-- 自动备份旧配置文件到 `backup/` 目录
-- 自动补全新增的配置项
-- 自动移除废弃的配置项
-- 保留用户已修改的配置值
-
 ### 配置示例
 
 ```toml
 # 配置元信息
 [inner]
-version = "1.0.0"  # 配置文件版本号，请勿手动修改
+
+# 配置文件版本号（用于配置文件升级与兼容性检查）
+version = "1.3.0"
+
 
 # 插件基础配置
 [plugin]
+
+# 是否启用 PFC 私聊聊天器
 enabled = true
-enabled_stream_types = ["private"]
+
 
 # 等待行为配置
 [waiting]
-default_max_wait_seconds = 300  # 默认等待超时时间(秒)
-min_wait_seconds = 30           # 最短等待时间
-max_wait_seconds = 1800         # 最长等待时间(30分钟)
+
+# 等待超时时间（秒），超时后AI会重新思考下一步行动
+wait_timeout_seconds = 300
+
+# 屏蔽忽略时间（秒，默认30分钟）- 执行 block_and_ignore 动作后忽略对方消息的时长
+#说人话就是bot使用黑名单后的屏蔽时间
+block_ignore_seconds = 1800
+
 
 # 会话管理配置
 [session]
+
+# 存储后端：file（JSON文件）或 database（使用 MoFox 数据库，支持 SQLite/PostgreSQL）
+storage_backend = "file"
+
+# 会话数据存储目录（相对于 data/，仅 file 后端使用）
 session_dir = "prefrontal_cortex_chatter/sessions"
-session_expire_seconds = 604800  # 会话过期时间(7天)
-max_history_entries = 100        # 最大历史记录条数
+
+# 会话过期时间（秒，默认7天）
+session_expire_seconds = 604800
+
+# 最大历史记录条数
+max_history_entries = 100
+
+# 从数据库加载的初始历史消息条数（启动时加载）
+initial_history_limit = 30
+
 
 # 回复检查器配置
 [reply_checker]
-enabled = true              # 是否启用回复检查器
-use_llm_check = true        # 是否使用 LLM 进行深度检查
-similarity_threshold = 0.9  # 相似度阈值(0-1)，超过此值判定为重复
-max_retries = 3             # 最大重试次数
+
+# 是否启用回复检查器
+enabled = false
+
+# 是否使用 LLM 进行深度检查（否则只做基本检查）
+use_llm_check = true
+
+# 相似度阈值（0-1），超过此值认为回复重复
+similarity_threshold = 0.9
+
+# 回复检查失败时的最大重试次数
+max_retries = 3
+
+
+# 联网搜索配置
+[web_search]
+
+# 是否启用联网搜索功能（需要 WEB_SEARCH_TOOL 插件）
+enabled = true
+
+# 每次搜索返回的结果数量
+num_results = 3
+
+# 搜索时间范围：any（任意时间）、week（一周内）、month（一月内）
+time_range = "any"
+
+# 是否启用答案模式（仅 Exa 搜索引擎支持，返回更精简的答案）
+answer_mode = false
+
+
+
 ```
 
 ### 回复检查器配置说明

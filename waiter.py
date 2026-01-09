@@ -27,7 +27,11 @@ from src.common.logger import get_logger
 from src.config.config import global_config
 
 from .models import ConversationInfo
-from .config import PFCConfig
+
+# PFCConfig 类型注解使用 TYPE_CHECKING
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .plugin import PFCConfig
 
 logger = get_logger("PFC-Waiter")
 
@@ -64,7 +68,7 @@ class Waiter:
         self._new_message_checker = new_message_checker
         
         # 超时配置 - 使用 waiting 配置
-        self.timeout_seconds = config.waiting.default_max_wait_seconds
+        self.timeout_seconds = config.waiting.wait_timeout_seconds
         self.check_interval = 5  # 每5秒检查一次
         
         logger.debug(f"[私聊][{private_name}]等待器初始化完成")

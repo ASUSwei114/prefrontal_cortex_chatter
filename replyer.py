@@ -34,7 +34,11 @@ from src.individuality.individuality import get_individuality
 from src.config.config import global_config
 
 from .models import ObservationInfo, ConversationInfo
-from .config import PFCConfig
+
+# PFCConfig 类型注解使用 TYPE_CHECKING
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .plugin import PFCConfig
 
 logger = get_logger("PFC-Replyer")
 
@@ -188,7 +192,7 @@ class ReplyGenerator:
             session: PFCSession 会话对象
             user_name: 用户名称
         """
-        from .config import get_config
+        from .plugin import get_config
         from .session import PFCSession
         
         self.session: PFCSession = session
@@ -506,13 +510,13 @@ class ReplyGenerator:
                 
         except AttributeError:
             logger.warning(
-                f"[私聊][{self.private_name}]"
+                f"[私聊][{self.user_name}]"
                 "ConversationInfo 对象可能缺少 knowledge_list 属性。"
             )
             knowledge_info_str += "- 获取知识列表时出错。\n"
         except Exception as e:
             logger.error(
-                f"[私聊][{self.private_name}]构建知识信息字符串时出错: {e}"
+                f"[私聊][{self.user_name}]构建知识信息字符串时出错: {e}"
             )
             knowledge_info_str += "- 处理知识列表时出错。\n"
         

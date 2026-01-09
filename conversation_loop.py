@@ -38,7 +38,6 @@ from src.common.logger import get_logger
 
 from .models import ConversationState
 from .session import PFCSession
-from .config import get_config
 
 logger = get_logger("pfc_loop")
 
@@ -53,6 +52,8 @@ class ConversationLoop:
     def __init__(self, session: PFCSession, user_name: str):
         self.session = session
         self.user_name = user_name
+        # 延迟导入配置以避免循环导入
+        from .plugin import get_config
         self.config = get_config()
         
         self._task: Optional[asyncio.Task] = None
@@ -478,7 +479,7 @@ class ConversationLoop:
     async def _do_wait_listening(self):
         """执行倾听等待"""
         from .waiter import Waiter
-        from .config import get_config
+        from .plugin import get_config
         
         config = get_config()
         
@@ -503,7 +504,7 @@ class ConversationLoop:
     async def _do_wait(self):
         """执行等待"""
         from .waiter import Waiter
-        from .config import get_config
+        from .plugin import get_config
         
         config = get_config()
         

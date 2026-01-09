@@ -1,5 +1,5 @@
 """
-Prefrontal Cortex Chatter - 插件注册
+Prefrontal Cortex Chatter - 插件注册与配置
 
 ================================================================================
 版权声明 (Copyright Notice)
@@ -22,37 +22,240 @@ Prefrontal Cortex Chatter - 插件注册
 ================================================================================
 """
 
-from typing import Any, ClassVar
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, TYPE_CHECKING
 
 from src.common.logger import get_logger
 from src.plugin_system import register_plugin
 from src.plugin_system.base.base_plugin import BasePlugin
 from src.plugin_system.base.config_types import ConfigField
 
-from .chatter import PrefrontalCortexChatter as _PrefrontalCortexChatter
-from .config import get_config, set_plugin_config
+if TYPE_CHECKING:
+    from .chatter import PrefrontalCortexChatter as _PrefrontalCortexChatter
 
 logger = get_logger("pfc_plugin")
 
 
-# 重新导出组件类，让 MPDT ComponentValidator 能够识别
-# （MPDT 静态分析器无法跟踪跨文件导入，需要在 plugin.py 中定义类引用）
-class PrefrontalCortexChatter(_PrefrontalCortexChatter):
-    """PFC 私聊聊天器 - 从 chatter.py 导入"""
-    pass
+# ============================================================================
+# 配置数据类
+# ============================================================================
+
+@dataclass
+class ReplyCheckerConfig:
+    """回复检查器配置"""
+    enabled: bool = True
+    use_llm_check: bool = True
+    similarity_threshold: float = 0.9
+    max_retries: int = 3
 
 
-# 为 MPDT ComponentValidator 定义 PFCReplyAction 类
-from .actions.reply import PFCReplyAction as _PFCReplyAction
+@dataclass
+class WebSearchConfig:
+    """联网搜索配置"""
+    enabled: bool = True
+    num_results: int = 3
+    time_range: str = "any"
+    answer_mode: bool = False
 
 
-class PFCReplyAction(_PFCReplyAction):
-    """PFC 专属回复动作 - 从 actions/reply.py 导入"""
-    pass
+@dataclass
+class WaitingConfig:
+    """等待配置"""
+    wait_timeout_seconds: int = 300
+    block_ignore_seconds: int = 1800
+
+
+@dataclass
+class SessionConfig:
+    """会话配置"""
+    storage_backend: str = "file"
+    session_dir: str = "prefrontal_cortex_chatter/sessions"
+    session_expire_seconds: int = 86400 * 7
+    max_history_entries: int = 100
+    initial_history_limit: int = 30
+
+
+@dataclass
+class PFCConfig:
+    """PFC 总配置"""
+    enabled: bool = True
+    waiting: WaitingConfig = field(default_factory=WaitingConfig)
+    session: SessionConfig = field(default_factory=SessionConfig)
+    reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)
+    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
+    
+    @property
+    def enabled_stream_types(self) -> list[str]:
+        """启用的消息源类型（硬编码为 private）"""
+        return ["private"]
+
+
+# 全局配置单例
+_config: PFCConfig | None = None
+_plugin_config: dict[str, Any] | None = None
+
+
+def set_plugin_config(config_dict: dict[str, Any]) -> None:
+    """设置插件配置（由插件调用）"""
+    global _plugin_config, _config
+    _plugin_config = config_dict
+    _config = None
+
+
+def get_config() -> PFCConfig:
+    """获取全局配置"""
+    global _config
+    if _config is None:
+        _config = _load_config()
+    return _config
+
+
+def _load_config() -> PFCConfig:
+    """加载 PFC 配置"""
+    config = PFCConfig()
+    
+    if _plugin_config:
+        config = _load_from_plugin_config(_plugin_config)
+    else:
+        config = _load_from_global_config()
+    
+    return config
+
+
+def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
+    """从插件配置字典加载配置"""
+    config = PFCConfig()
+    
+    try:
+        if "plugin" in cfg:
+            config.enabled = cfg["plugin"].get("enabled", True)
+
+        if "waiting" in cfg:
+            w = cfg["waiting"]
+            config.waiting = WaitingConfig(
+                wait_timeout_seconds=w.get("wait_timeout_seconds", 300),
+                block_ignore_seconds=w.get("block_ignore_seconds", 1800),
+            )
+
+        if "session" in cfg:
+            s = cfg["session"]
+            config.session = SessionConfig(
+                storage_backend=s.get("storage_backend", "file"),
+                session_dir=s.get("session_dir", "prefrontal_cortex_chatter/sessions"),
+                session_expire_seconds=s.get("session_expire_seconds", 86400 * 7),
+                max_history_entries=s.get("max_history_entries", 100),
+                initial_history_limit=s.get("initial_history_limit", 30),
+            )
+
+        if "reply_checker" in cfg:
+            r = cfg["reply_checker"]
+            config.reply_checker = ReplyCheckerConfig(
+                enabled=r.get("enabled", True),
+                use_llm_check=r.get("use_llm_check", True),
+                similarity_threshold=r.get("similarity_threshold", 0.9),
+                max_retries=r.get("max_retries", 3),
+            )
+
+        if "web_search" in cfg:
+            ws = cfg["web_search"]
+            config.web_search = WebSearchConfig(
+                enabled=ws.get("enabled", True),
+                num_results=ws.get("num_results", 3),
+                time_range=ws.get("time_range", "any"),
+                answer_mode=ws.get("answer_mode", False),
+            )
+
+    except Exception as e:
+        logger.warning(f"从插件配置加载失败，使用默认值: {e}")
+
+    return config
+
+
+def _load_from_global_config() -> PFCConfig:
+    """从全局配置加载 PFC 配置（兼容旧版）"""
+    from src.config.config import global_config
+
+    config = PFCConfig()
+
+    if not global_config:
+        return config
+
+    try:
+        if hasattr(global_config, "prefrontal_cortex_chatter"):
+            pfc_cfg = getattr(global_config, "prefrontal_cortex_chatter")
+
+            if hasattr(pfc_cfg, "plugin"):
+                plugin_cfg = pfc_cfg.plugin
+                if hasattr(plugin_cfg, "enabled"):
+                    config.enabled = plugin_cfg.enabled
+
+            if hasattr(pfc_cfg, "waiting"):
+                w = pfc_cfg.waiting
+                config.waiting = WaitingConfig(
+                    wait_timeout_seconds=getattr(w, "wait_timeout_seconds", 300),
+                    block_ignore_seconds=getattr(w, "block_ignore_seconds", 1800),
+                )
+
+            if hasattr(pfc_cfg, "session"):
+                s = pfc_cfg.session
+                config.session = SessionConfig(
+                    storage_backend=getattr(s, "storage_backend", "file"),
+                    session_dir=getattr(s, "session_dir", "prefrontal_cortex_chatter/sessions"),
+                    session_expire_seconds=getattr(s, "session_expire_seconds", 86400 * 7),
+                    max_history_entries=getattr(s, "max_history_entries", 100),
+                    initial_history_limit=getattr(s, "initial_history_limit", 30),
+                )
+
+            if hasattr(pfc_cfg, "reply_checker"):
+                r = pfc_cfg.reply_checker
+                config.reply_checker = ReplyCheckerConfig(
+                    enabled=getattr(r, "enabled", True),
+                    use_llm_check=getattr(r, "use_llm_check", True),
+                    similarity_threshold=getattr(r, "similarity_threshold", 0.9),
+                    max_retries=getattr(r, "max_retries", 3),
+                )
+
+            if hasattr(pfc_cfg, "web_search"):
+                ws = pfc_cfg.web_search
+                config.web_search = WebSearchConfig(
+                    enabled=getattr(ws, "enabled", True),
+                    num_results=getattr(ws, "num_results", 3),
+                    time_range=getattr(ws, "time_range", "any"),
+                    answer_mode=getattr(ws, "answer_mode", False),
+                )
+
+    except Exception as e:
+        logger.warning(f"从全局配置加载失败，使用默认值: {e}")
+
+    return config
+
+
+def reload_config() -> PFCConfig:
+    """重新加载配置"""
+    global _config
+    _config = _load_config()
+    return _config
+
+
+# ============================================================================
+# 插件组件（延迟导入以避免循环导入）
+# ============================================================================
+
+
+def _get_chatter_class():
+    """延迟获取 PrefrontalCortexChatter 类"""
+    from .chatter import PrefrontalCortexChatter
+    return PrefrontalCortexChatter
+
+
+def _get_reply_action_class():
+    """延迟获取 PFCReplyAction 类"""
+    from .actions.reply import PFCReplyAction
+    return PFCReplyAction
 
 
 # 配置文件版本号 - 更新配置结构时递增此版本
-CONFIG_VERSION = "1.2.0"
+CONFIG_VERSION = "1.3.0"
 
 
 @register_plugin
@@ -98,28 +301,13 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 default=True,
                 description="是否启用 PFC 私聊聊天器",
             ),
-            "enabled_stream_types": ConfigField(
-                type=list,
-                default=["private"],
-                description="启用的消息源类型",
-                example='["private"]',
-            ),
+            # enabled_stream_types 已硬编码为 ["private"]，不再作为配置项
         },
         "waiting": {
-            "default_max_wait_seconds": ConfigField(
+            "wait_timeout_seconds": ConfigField(
                 type=int,
                 default=300,
-                description="默认等待超时时间（秒）",
-            ),
-            "min_wait_seconds": ConfigField(
-                type=int,
-                default=30,
-                description="允许的最短等待时间（秒）",
-            ),
-            "max_wait_seconds": ConfigField(
-                type=int,
-                default=1800,
-                description="允许的最长等待时间（秒，30分钟）",
+                description="等待超时时间（秒），超时后AI会重新思考下一步行动",
             ),
             "block_ignore_seconds": ConfigField(
                 type=int,
@@ -236,7 +424,6 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             logger.error(f"[PFC] 数据库表初始化失败: {e}")
             logger.warning("[PFC] 将回退到文件存储后端")
             # 回退到文件存储
-            from .config import get_config
             config = get_config()
             config.session.storage_backend = "file"
 
@@ -254,20 +441,22 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
         components = []
 
         try:
-            # 注册 Chatter
+            # 注册 Chatter（延迟导入）
+            ChatterClass = _get_chatter_class()
             components.append((
-                PrefrontalCortexChatter.get_chatter_info(),
-                PrefrontalCortexChatter,
+                ChatterClass.get_chatter_info(),
+                ChatterClass,
             ))
             logger.debug("[PFC] 成功加载 PrefrontalCortexChatter 组件")
         except Exception as e:
             logger.error(f"[PFC] 加载 Chatter 组件失败: {e}")
 
         try:
-            # 注册 PFC 专属 Reply 动作（使用本文件中定义的包装类）
+            # 注册 PFC 专属 Reply 动作（延迟导入）
+            ReplyActionClass = _get_reply_action_class()
             components.append((
-                PFCReplyAction.get_action_info(),
-                PFCReplyAction,
+                ReplyActionClass.get_action_info(),
+                ReplyActionClass,
             ))
             logger.debug("[PFC] 成功加载 PFCReplyAction 组件")
         except Exception as e:

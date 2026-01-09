@@ -38,27 +38,101 @@ Prefrontal Cortex Chatter (PFC) - 私聊特化聊天器
 
 from src.plugin_system.base.plugin_metadata import PluginMetadata
 
-from .chatter import PrefrontalCortexChatter
-from .config import PFCConfig
-from .goal_analyzer import GoalAnalyzer
-from .knowledge_fetcher import KnowledgeFetcher
+# 先导入不依赖 plugin 的模块
 from .models import (
     ActionType,
     ConversationInfo,
     ConversationState,
     ObservationInfo,
 )
-from .planner import ActionPlanner
-from .plugin import PrefrontalCortexChatterPlugin
-from .replyer import ReplyChecker, ReplyGenerator
-from .session import PFCSession, SessionManager, get_session_manager
-from .waiter import Waiter
+
+# 导入 plugin 模块（配置相关）
+from .plugin import PFCConfig, PrefrontalCortexChatterPlugin
+
+# 延迟导入其他模块以避免循环导入
+def _get_chatter():
+    from .chatter import PrefrontalCortexChatter
+    return PrefrontalCortexChatter
+
+def _get_goal_analyzer():
+    from .goal_analyzer import GoalAnalyzer
+    return GoalAnalyzer
+
+def _get_knowledge_fetcher():
+    from .knowledge_fetcher import KnowledgeFetcher
+    return KnowledgeFetcher
+
+def _get_action_planner():
+    from .planner import ActionPlanner
+    return ActionPlanner
+
+def _get_replyer_classes():
+    from .replyer import ReplyChecker, ReplyGenerator
+    return ReplyChecker, ReplyGenerator
+
+def _get_session_classes():
+    from .session import PFCSession, SessionManager, get_session_manager
+    return PFCSession, SessionManager, get_session_manager
+
+def _get_waiter():
+    from .waiter import Waiter
+    return Waiter
+
+# 为了保持向后兼容，在模块级别提供这些类
+# 注意：这些导入会在模块首次被访问时执行
+PrefrontalCortexChatter = None
+GoalAnalyzer = None
+KnowledgeFetcher = None
+ActionPlanner = None
+ReplyChecker = None
+ReplyGenerator = None
+PFCSession = None
+SessionManager = None
+get_session_manager = None
+Waiter = None
+
+def __getattr__(name):
+    """延迟加载模块属性"""
+    global PrefrontalCortexChatter, GoalAnalyzer, KnowledgeFetcher, ActionPlanner
+    global ReplyChecker, ReplyGenerator, PFCSession, SessionManager, get_session_manager, Waiter
+    
+    if name == "PrefrontalCortexChatter":
+        PrefrontalCortexChatter = _get_chatter()
+        return PrefrontalCortexChatter
+    elif name == "GoalAnalyzer":
+        GoalAnalyzer = _get_goal_analyzer()
+        return GoalAnalyzer
+    elif name == "KnowledgeFetcher":
+        KnowledgeFetcher = _get_knowledge_fetcher()
+        return KnowledgeFetcher
+    elif name == "ActionPlanner":
+        ActionPlanner = _get_action_planner()
+        return ActionPlanner
+    elif name == "ReplyChecker":
+        ReplyChecker, ReplyGenerator = _get_replyer_classes()
+        return ReplyChecker
+    elif name == "ReplyGenerator":
+        ReplyChecker, ReplyGenerator = _get_replyer_classes()
+        return ReplyGenerator
+    elif name == "PFCSession":
+        PFCSession, SessionManager, get_session_manager = _get_session_classes()
+        return PFCSession
+    elif name == "SessionManager":
+        PFCSession, SessionManager, get_session_manager = _get_session_classes()
+        return SessionManager
+    elif name == "get_session_manager":
+        PFCSession, SessionManager, get_session_manager = _get_session_classes()
+        return get_session_manager
+    elif name == "Waiter":
+        Waiter = _get_waiter()
+        return Waiter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __plugin_meta__ = PluginMetadata(
     name="Prefrontal Cortex Chatter",
     description="从 MaiM-with-u 0.6.3-fix4 移植的私聊系统，支持目标驱动的对话管理、多种行动类型、回复质量检查等功能",
     usage="在私聊场景中自动启用，可通过 config/plugins/prefrontal_cortex_chatter/config.toml 配置",
-    version="1.1.1",
+    version="1.2.0",
     author="ASUSwei114",
     license="GPL-3.0-or-later",
     repository_url="https://github.com/ASUSwei114/prefrontal_cortex_chatter",

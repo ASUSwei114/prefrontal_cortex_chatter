@@ -39,7 +39,6 @@ from src.common.logger import get_logger
 from src.plugin_system.base.base_chatter import BaseChatter
 from src.plugin_system.base.component_types import ChatType
 
-from .config import get_config
 from .models import ConversationState
 from .session import PFCSession, get_session_manager
 
@@ -77,7 +76,8 @@ class PrefrontalCortexChatter(BaseChatter):
         # 核心组件
         self.session_manager = get_session_manager()
 
-        # 加载配置
+        # 延迟导入配置以避免循环导入
+        from .plugin import get_config
         self._config = get_config()
 
         # 并发控制

@@ -24,7 +24,10 @@ from typing import List, Tuple, Dict, Any
 from src.common.logger import get_logger
 from src.plugin_system.apis import llm_api
 
-from .config import PFCConfig
+# PFCConfig 类型注解使用 TYPE_CHECKING
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .plugin import PFCConfig
 
 logger = get_logger("PFC-KnowledgeFetcher")
 

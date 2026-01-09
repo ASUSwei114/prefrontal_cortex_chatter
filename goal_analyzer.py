@@ -137,7 +137,7 @@ class GoalAnalyzer:
         Args:
             session: PFCSession 会话对象
         """
-        from .config import get_config
+        from .plugin import get_config
         from .session import PFCSession
         
         self.session: PFCSession = session
@@ -516,7 +516,7 @@ class GoalAnalyzer:
                 return goal, "", reasoning
         
         logger.warning(
-            f"[私聊][{self.private_name}]无法解析目标响应: {content[:100]}..."
+            f"[PFC]无法解析目标响应: {content[:100]}..."
         )
         return "", "", ""
     
@@ -549,13 +549,24 @@ class GoalAnalyzer:
         )
         
         try:
-            content = await llm_api.generate_with_model(
-                model_name=self.config.llm.planner_model,
+            models = llm_api.get_available_models()
+            planner_config = models.get("planner") or models.get("normal")
+            
+            if not planner_config:
+                logger.warning("[PFC] 未找到 planner 模型配置")
+                return False, False, "未找到模型配置"
+            
+            success, content, _, _ = await llm_api.generate_with_model(
                 prompt=prompt,
-                temperature=0.7,
-                max_tokens=500
+                model_config=planner_config,
+                request_type="pfc.conversation_analysis",
             )
-            logger.debug(f"[私聊][{self.private_name}]LLM原始返回内容: {content}")
+            
+            if not success or not content:
+                logger.warning(f"[PFC]LLM调用失败: {content}")
+                return False, False, "LLM调用失败"
+            
+            logger.debug(f"[PFC]LLM原始返回内容: {content}")
             
             # 解析JSON响应
             result = extract_json_from_text(content)
@@ -574,13 +585,13 @@ class GoalAnalyzer:
                 return goal_achieved, stop_conversation, reason
             
             logger.error(
-                f"[私聊][{self.private_name}]无法解析对话分析结果JSON"
+                f"[PFC]无法解析对话分析结果JSON"
             )
             return False, False, "解析结果失败"
             
         except Exception as e:
             logger.error(
-                f"[私聊][{self.private_name}]分析对话状态时出错: {e}"
+                f"[PFC]分析对话状态时出错: {e}"
             )
             return False, False, f"分析出错: {e}"
     

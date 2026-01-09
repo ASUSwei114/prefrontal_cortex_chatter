@@ -646,7 +646,7 @@ def get_session_manager() -> SessionManager:
     """
     global _session_manager
     if _session_manager is None:
-        from .config import get_config
+        from .plugin import get_config
         config = get_config()
         
         storage_backend = config.session.storage_backend
