@@ -483,9 +483,21 @@ class ConversationLoop:
         
         config = get_config()
         
+        # 记录等待开始时的消息数量，用于检测是否有新增消息
+        initial_message_count = self.session.observation_info.new_messages_count
+        logger.debug(
+            f"[PFC][{self.user_name}] 开始倾听等待，初始消息数: {initial_message_count}"
+        )
+        
         async def check_new_message(since_time: float) -> bool:
-            """检查是否有新消息"""
-            return self.session.observation_info.new_messages_count > 0
+            """检查是否有新增消息（相对于等待开始时）"""
+            current_count = self.session.observation_info.new_messages_count
+            has_new = current_count > initial_message_count
+            if has_new:
+                logger.debug(
+                    f"[PFC][{self.user_name}] 检测到新消息: {initial_message_count} -> {current_count}"
+                )
+            return has_new
         
         waiter = Waiter(
             self.session.stream_id,
@@ -508,9 +520,21 @@ class ConversationLoop:
         
         config = get_config()
         
+        # 记录等待开始时的消息数量，用于检测是否有新增消息
+        initial_message_count = self.session.observation_info.new_messages_count
+        logger.debug(
+            f"[PFC][{self.user_name}] 开始常规等待，初始消息数: {initial_message_count}"
+        )
+        
         async def check_new_message(since_time: float) -> bool:
-            """检查是否有新消息"""
-            return self.session.observation_info.new_messages_count > 0
+            """检查是否有新增消息（相对于等待开始时）"""
+            current_count = self.session.observation_info.new_messages_count
+            has_new = current_count > initial_message_count
+            if has_new:
+                logger.debug(
+                    f"[PFC][{self.user_name}] 检测到新消息: {initial_message_count} -> {current_count}"
+                )
+            return has_new
         
         waiter = Waiter(
             self.session.stream_id,

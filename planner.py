@@ -515,10 +515,38 @@ class ActionPlanner:
         
         PFC 使用自定义的消息格式，使用相对时间格式让 LLM 理解时间上下文。
         
-        注意：为避免消息重复，需要检查 unprocessed_messages 中的消息
-        是否已经在 chat_history 中存在。
+        重要：每次调用都重新计算相对时间，避免缓存导致时间不准确。
         """
-        chat_history_text = self.session.observation_info.chat_history_str
+        formatted_blocks = []
+        
+        # 历史消息 - 每次都重新计算相对时间
+        for msg in self.session.observation_info.chat_history[-30:]:
+            msg_type = msg.get("type", "")
+            content = msg.get("content", "")
+            msg_time = msg.get("time", time.time())
+
+            # 使用相对时间格式（每次重新计算）
+            readable_time = self._translate_timestamp(msg_time)
+
+            if msg_type == "user_message":
+                sender = msg.get("user_name", self.user_name)
+                header = f"{readable_time} {sender} 说:"
+            elif msg_type == "bot_message":
+                header = f"{readable_time} {self.bot_name}(你) 说:"
+            else:
+                continue
+            
+            formatted_blocks.append(header)
+            
+            # 添加内容
+            if content:
+                stripped_content = content.strip()
+                if stripped_content:
+                    if stripped_content.endswith("。"):
+                        stripped_content = stripped_content[:-1]
+                    formatted_blocks.append(f"{stripped_content};")
+            
+            formatted_blocks.append("")  # 空行分隔
 
         # 添加新消息（仅添加尚未在历史中的消息）
         new_messages_count = self.session.observation_info.new_messages_count
@@ -535,22 +563,18 @@ class ActionPlanner:
                 new_blocks = []
                 actual_new_count = 0
                 for msg in unprocessed:
-                    # 检查消息是否已经在历史中（通过时间戳判断）
                     msg_time = msg.get("time", time.time())
                     if msg_time and msg_time in processed_times:
-                        # 消息已经在历史中，跳过
                         continue
                     
                     content = msg.get("content", "")
-                    if not content:  # 跳过空内容
+                    if not content:
                         continue
                     user_name = msg.get("user_name", "用户")
                     msg_type = msg.get("type", "")
                     
-                    # 使用相对时间格式
                     readable_time = self._translate_timestamp(msg_time)
                     
-                    # 根据消息类型格式化（使用原版格式）
                     if msg_type == "bot_message":
                         header = f"{readable_time} {self.bot_name}(你) 说:"
                     else:
@@ -558,20 +582,22 @@ class ActionPlanner:
                     
                     new_blocks.append(header)
                     
-                    # 格式化内容
                     stripped_content = content.strip()
                     if stripped_content:
                         if stripped_content.endswith("。"):
                             stripped_content = stripped_content[:-1]
                         new_blocks.append(f"{stripped_content};")
                     
-                    new_blocks.append("")  # 空行分隔
+                    new_blocks.append("")
                     actual_new_count += 1
                 
                 if new_blocks:
                     new_messages_str = "\n".join(new_blocks).strip()
-                    chat_history_text += f"\n--- 以下是 {actual_new_count} 条新消息 ---\n{new_messages_str}"
+                    formatted_blocks.append(f"--- 以下是 {actual_new_count} 条新消息 ---")
+                    formatted_blocks.append(new_messages_str)
 
+        chat_history_text = "\n".join(formatted_blocks).strip()
+        
         if not chat_history_text:
             chat_history_text = "还没有聊天记录。"
 
