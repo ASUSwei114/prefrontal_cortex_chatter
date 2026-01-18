@@ -64,6 +64,7 @@ class WaitingConfig:
     """等待配置"""
     wait_timeout_seconds: int = 300
     block_ignore_seconds: int = 1800
+    enable_block_action: bool = True  # 是否启用 block_and_ignore 动作
 
 
 @dataclass
@@ -142,6 +143,7 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
             config.waiting = WaitingConfig(
                 wait_timeout_seconds=w.get("wait_timeout_seconds", 300),
                 block_ignore_seconds=w.get("block_ignore_seconds", 1800),
+                enable_block_action=w.get("enable_block_action", True),
             )
 
         if "session" in cfg:
@@ -201,6 +203,7 @@ def _load_from_global_config() -> PFCConfig:
                 config.waiting = WaitingConfig(
                     wait_timeout_seconds=getattr(w, "wait_timeout_seconds", 300),
                     block_ignore_seconds=getattr(w, "block_ignore_seconds", 1800),
+                    enable_block_action=getattr(w, "enable_block_action", True),
                 )
 
             if hasattr(pfc_cfg, "session"):
@@ -320,6 +323,11 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 type=int,
                 default=1800,
                 description="屏蔽忽略时间（秒，默认30分钟）- 执行 block_and_ignore 动作后忽略对方消息的时长",
+            ),
+            "enable_block_action": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能",
             ),
         },
         "session": {

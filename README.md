@@ -108,6 +108,9 @@ wait_timeout_seconds = 300
 # 屏蔽忽略时间（秒，默认30分钟）- 执行 block_and_ignore 动作后忽略对方消息的时长
 block_ignore_seconds = 1800
 
+# 是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能
+enable_block_action = true
+
 
 # 会话管理配置
 [session]
@@ -174,6 +177,7 @@ answer_mode = false
 |--------|------|--------|------|
 | `wait_timeout_seconds` | int | `300` | 等待超时时间（秒），超时后 AI 会重新思考下一步行动 |
 | `block_ignore_seconds` | int | `1800` | 屏蔽忽略时间（秒），执行 block_and_ignore 动作后忽略对方消息的时长 |
+| `enable_block_action` | bool | `true` | 是否启用 block_and_ignore 动作。设为 `false` 可禁用屏蔽功能 |
 
 #### 会话管理配置 `[session]`
 
