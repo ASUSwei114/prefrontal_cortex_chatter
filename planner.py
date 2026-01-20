@@ -315,7 +315,8 @@ class ActionPlanner:
 
         # 选择 Prompt（根据配置决定是否包含 block_and_ignore 动作）
         last_successful_reply_action = self.session.conversation_info.last_successful_reply_action
-        enable_block = self._config.waiting.enable_block_action
+        # 使用 getattr 安全访问，兼容旧版配置文件
+        enable_block = getattr(self._config.waiting, 'enable_block_action', True)
         
         if last_successful_reply_action in ["direct_reply", "send_new_message"]:
             if enable_block:
