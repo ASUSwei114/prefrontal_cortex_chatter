@@ -5,7 +5,19 @@ PFC - 共享工具模块
 版权声明 (Copyright Notice)
 ================================================================================
 
-本文件为 MoFox_Bot 项目的一部分。
+原始代码来源: MaiM-with-u (https://github.com/MaiM-with-u/MaiBot)
+原始版本: 0.6.3-fix4
+原始代码路径: src/plugins/PFC/
+原始许可证: GNU General Public License v3.0
+
+本文件由 ASUSwei114 (https://github.com/ASUSwei114) 于 2024年12月 修改移植至 MoFox_Bot 项目。
+
+主要修改内容:
+- 适配 MoFox_Bot 插件系统架构
+- 添加人格信息获取助手
+- 添加时间格式化工具
+- 添加聊天历史构建工具
+- 添加 Prompt 构建工具
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
