@@ -92,9 +92,16 @@ class ConversationLoop:
                 await asyncio.sleep(30)
                 continue
             elif self.session.ignore_until_timestamp and time.time() >= self.session.ignore_until_timestamp:
-                logger.info(f"[PFC][{self.user_name}] 忽略时间已到，准备结束对话")
+                # 忽略时间已过，清除忽略状态
+                logger.info(f"[PFC][{self.user_name}] 忽略时间已到，清除忽略状态")
                 self.session.ignore_until_timestamp = None
-                self.session.should_continue = False
+                # 检查是否有新消息，如果有则继续处理
+                if self.session.observation_info.new_messages_count > 0:
+                    logger.info(f"[PFC][{self.user_name}] 有 {self.session.observation_info.new_messages_count} 条新消息，继续对话")
+                else:
+                    # 没有新消息则结束对话
+                    logger.info(f"[PFC][{self.user_name}] 无新消息，准备结束对话")
+                    self.session.should_continue = False
                 continue
             
             try:

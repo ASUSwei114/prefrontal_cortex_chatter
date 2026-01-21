@@ -16,6 +16,7 @@ PFC - 会话管理
 - 重构会话管理器架构
 - 添加会话持久化功能
 - 添加主动思考触发检测
+- 使用共享模块精简代码
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
@@ -42,6 +43,7 @@ from .models import (
     ObservationInfo,
     WaitingConfig,
 )
+from .shared import translate_timestamp
 
 logger = get_logger("pfc_session")
 
@@ -162,17 +164,17 @@ class PFCSession:
     
     def _clear_timeout_goals(self) -> None:
         """
-        清除超时相关的目标
+        清除超时相关的目标和"结束对话"目标
         
         当用户发送新消息时，应该清除之前因等待超时而添加的目标，
-        避免 AI 错误地认为"已经等待了X分钟"。
+        以及"结束对话"目标，避免 AI 错误地认为"已经等待了X分钟"或继续沿用结束对话的目标。
         
         超时目标的特征是包含"分钟，思考接下来要做什么"或类似的文本。
         """
         if not self.conversation_info.goal_list:
             return
         
-        # 过滤掉超时相关的目标
+        # 过滤掉超时相关的目标和"结束对话"目标
         timeout_keywords = [
             "分钟，思考接下来要做什么",
             "分钟，注意可能在对方看来聊天已经结束",
@@ -186,11 +188,13 @@ class PFCSession:
             if isinstance(goal_item, dict):
                 goal_text = goal_item.get("goal", "")
                 if isinstance(goal_text, str):
-                    # 检查是否是超时目标
+                    # 检查是否是超时目标或"结束对话"目标
                     is_timeout_goal = any(
                         keyword in goal_text for keyword in timeout_keywords
                     )
-                    if not is_timeout_goal:
+                    is_end_conversation_goal = goal_text == "结束对话"
+                    
+                    if not is_timeout_goal and not is_end_conversation_goal:
                         filtered_goals.append(goal_item)
                 else:
                     filtered_goals.append(goal_item)
@@ -201,7 +205,7 @@ class PFCSession:
         if removed_count > 0:
             self.conversation_info.goal_list = filtered_goals
             logger.debug(
-                f"Session {self.user_id} 清除了 {removed_count} 个超时目标"
+                f"Session {self.user_id} 清除了 {removed_count} 个超时/结束对话目标"
             )
 
     def add_bot_message(
@@ -246,22 +250,8 @@ class PFCSession:
         self.update_activity()
     
     def _translate_timestamp(self, timestamp: float) -> str:
-        """将时间戳转换为相对时间格式"""
-        now = time.time()
-        diff = now - timestamp
-        
-        if diff < 20:
-            return "刚刚"
-        elif diff < 60:
-            return f"{int(diff)}秒前"
-        elif diff < 3600:
-            return f"{int(diff / 60)}分钟前"
-        elif diff < 86400:
-            return f"{int(diff / 3600)}小时前"
-        elif diff < 86400 * 2:
-            return f"{int(diff / 86400)}天前"
-        else:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+        """将时间戳转换为相对时间格式（使用共享模块）"""
+        return translate_timestamp(timestamp)
     
     def get_time_info(self) -> str:
         """

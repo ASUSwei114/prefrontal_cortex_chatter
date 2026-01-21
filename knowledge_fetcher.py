@@ -19,6 +19,7 @@ PFC知识获取器模块
 
 负责从记忆系统和知识库中获取相关知识
 """
+from __future__ import annotations
 
 from typing import List, Tuple, Dict, Any
 from src.common.logger import get_logger

@@ -16,6 +16,7 @@ PFC目标分析器模块
 - 适配 MoFox_Bot 的 LLM API
 - 重构人格信息获取逻辑
 - 独立为单独模块
+- 使用共享模块精简代码
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
@@ -25,15 +26,18 @@ PFC目标分析器模块
 负责分析对话历史并设定/更新对话目标
 """
 
-import datetime
 from typing import List, Tuple, Optional, Dict, Any
 from src.common.logger import get_logger
 from src.plugin_system.apis import llm_api
-from src.individuality.individuality import get_individuality
 from src.config.config import global_config
 
 from .models import ObservationInfo, ConversationInfo
 from .utils import extract_json_from_text, extract_json_array_from_text
+from .shared import (
+    PersonalityHelper,
+    get_current_time_str,
+    build_goals_string,
+)
 
 logger = get_logger("PFC-GoalAnalyzer")
 
@@ -143,11 +147,11 @@ class GoalAnalyzer:
         self.session: PFCSession = session
         self.config = get_config()
         
-        # 人格信息将在异步方法中获取
-        self.personality_info: Optional[str] = None
+        # 使用共享的人格信息助手
+        self._personality_helper = PersonalityHelper("")
         
         # 获取机器人名称
-        self.bot_name = global_config.bot.nickname if global_config else "Bot"
+        self.bot_name = self._personality_helper.bot_name
         
         # 多目标存储结构
         self.goals: List[Tuple[str, str, str]] = []  # (goal, method, reasoning)
@@ -155,76 +159,6 @@ class GoalAnalyzer:
         self.current_goal_and_reason = None
         
         logger.debug("[PFC]目标分析器初始化完成")
-    
-    async def _ensure_personality_info(self) -> str:
-        """
-        确保人格信息已加载（异步获取）
-        
-        Returns:
-            人格信息字符串
-        """
-        if self.personality_info is None:
-            try:
-                individuality = get_individuality()
-                base_personality = await individuality.get_personality_block()
-                # 追加 background_story（包含人际关系等重要信息）
-                background_story = self._get_background_story()
-                if background_story:
-                    self.personality_info = f"{base_personality}\n\n【背景信息】\n{background_story}"
-                else:
-                    self.personality_info = base_personality
-                logger.debug(f"[PFC]获取人格信息成功: {self.personality_info[:50]}...")
-            except Exception as e:
-                logger.warning(f"[PFC]获取人格信息失败: {e}，尝试从配置读取")
-                # 从配置文件读取人格信息作为备选
-                self.personality_info = self._build_personality_from_config()
-        return self.personality_info
-    
-    def _get_background_story(self) -> str:
-        """
-        获取背景故事（包含人际关系等信息）
-        
-        Returns:
-            背景故事字符串
-        """
-        try:
-            if global_config and hasattr(global_config, 'personality'):
-                return getattr(global_config.personality, 'background_story', '') or ''
-        except Exception:
-            pass
-        return ''
-    
-    def _build_personality_from_config(self) -> str:
-        """
-        从配置文件构建人格信息（备选方案）
-        
-        Returns:
-            人格信息字符串
-        """
-        try:
-            bot_name = global_config.bot.nickname if global_config else "Bot"
-            alias_names = global_config.bot.alias_names if global_config else []
-            personality_core = global_config.personality.personality_core if global_config else ""
-            personality_side = global_config.personality.personality_side if global_config else ""
-            identity = global_config.personality.identity if global_config else ""
-            
-            # 构建人格信息
-            parts = [f"你的名字是{bot_name}"]
-            if alias_names:
-                parts.append(f"也有人叫你{','.join(alias_names)}")
-            if personality_core:
-                parts.append(f"你{personality_core}")
-            if personality_side:
-                parts.append(personality_side)
-            if identity:
-                parts.append(identity)
-            
-            result = "，".join(parts)
-            logger.debug(f"[PFC]从配置构建人格信息: {result[:50]}...")
-            return result
-        except Exception as e:
-            logger.error(f"[PFC]从配置构建人格信息失败: {e}")
-            return "一个友善的AI助手"
     
     async def analyze_goal(self) -> Tuple[str, str, str]:
         """
@@ -283,7 +217,7 @@ class GoalAnalyzer:
         observation_info: ObservationInfo
     ) -> Dict[str, str]:
         """
-        构建Prompt参数
+        构建Prompt参数（使用共享模块）
         
         Args:
             conversation_info: 对话信息
@@ -292,11 +226,11 @@ class GoalAnalyzer:
         Returns:
             Prompt参数字典
         """
-        # 确保人格信息已加载
-        personality_info = await self._ensure_personality_info()
+        # 使用共享模块获取人格信息
+        personality_info = await self._personality_helper.get_personality_info()
         
-        # 构建对话目标字符串
-        goals_str = self._build_goals_string(conversation_info.goal_list)
+        # 使用共享模块构建对话目标字符串
+        goals_str = build_goals_string(conversation_info.goal_list)
         
         # 获取聊天历史记录
         chat_history_text = await self._build_chat_history_text(observation_info)
@@ -309,8 +243,8 @@ class GoalAnalyzer:
             conversation_info.done_action
         )
         
-        # 获取当前时间字符串
-        current_time_str = self._get_current_time_str()
+        # 使用共享模块获取当前时间字符串
+        current_time_str = get_current_time_str()
         
         return {
             "persona_text": persona_text,
@@ -319,67 +253,6 @@ class GoalAnalyzer:
             "action_history_text": action_history_text,
             "current_time_str": current_time_str
         }
-    
-    def _get_current_time_str(self) -> str:
-        """
-        获取当前时间的人类可读格式
-        
-        Returns:
-            格式化的时间字符串，如 "2025年12月23日 星期一 中午 12:21"
-        """
-        now = datetime.datetime.now()
-        
-        # 星期几
-        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-        weekday = weekday_names[now.weekday()]
-        
-        # 时间段
-        hour = now.hour
-        if 5 <= hour < 9:
-            time_period = "早上"
-        elif 9 <= hour < 12:
-            time_period = "上午"
-        elif 12 <= hour < 14:
-            time_period = "中午"
-        elif 14 <= hour < 18:
-            time_period = "下午"
-        elif 18 <= hour < 22:
-            time_period = "晚上"
-        else:
-            time_period = "深夜"
-        
-        # 格式化时间字符串
-        time_str = now.strftime(f"%Y年%m月%d日 {weekday} {time_period} %H:%M")
-        return time_str
-    
-    def _build_goals_string(
-        self,
-        goal_list: Optional[List[Dict[str, Any]]]
-    ) -> str:
-        """
-        构建对话目标字符串
-        
-        Args:
-            goal_list: 目标列表
-            
-        Returns:
-            格式化的目标字符串
-        """
-        if not goal_list:
-            return "目标：目前没有明确对话目标，产生该对话目标的原因：目前没有明确对话目标，最好思考一个对话目标\n"
-        
-        goals_str = ""
-        for goal_item in goal_list:
-            if isinstance(goal_item, dict):
-                goal = goal_item.get("goal", "目标内容缺失")
-                reasoning = goal_item.get("reasoning", "没有明确原因")
-            else:
-                goal = str(goal_item)
-                reasoning = "没有明确原因"
-            
-            goals_str += f"目标：{goal}，产生该对话目标的原因：{reasoning}\n"
-        
-        return goals_str
     
     async def _build_chat_history_text(
         self,
@@ -537,8 +410,10 @@ class GoalAnalyzer:
         Returns:
             (goal_achieved, stop_conversation, reason) 元组
         """
-        persona_text = f"你的名字是{self.bot_name}，{self.personality_info}。"
-        current_time_str = self._get_current_time_str()
+        # 使用共享模块获取人格信息
+        personality_info = await self._personality_helper.get_personality_info()
+        persona_text = f"你的名字是{self.bot_name}，{personality_info}。"
+        current_time_str = get_current_time_str()
         
         prompt = PROMPT_ANALYZE_CONVERSATION.format(
             persona_text=persona_text,
