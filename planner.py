@@ -16,6 +16,7 @@ PFC - 行动规划器
 - 适配 MoFox_Bot 的 LLM API
 - 重构人格信息获取逻辑
 - 修复聊天历史构建问题
+- 使用共享模块精简代码
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
@@ -26,16 +27,23 @@ PFC - 行动规划器
 """
 
 import time
-import datetime
-from typing import Tuple, Optional
+from typing import Tuple
 
 from src.common.logger import get_logger
 from src.config.config import global_config
-from src.individuality.individuality import get_individuality
 from src.plugin_system.apis import llm_api
 
 from .session import PFCSession
 from .utils import get_items_from_json
+from .shared import (
+    PersonalityHelper,
+    get_current_time_str,
+    translate_timestamp,
+    build_goals_string,
+    build_knowledge_string,
+    format_chat_history,
+    format_new_messages,
+)
 
 logger = get_logger("pfc_planner")
 
@@ -212,84 +220,13 @@ class ActionPlanner:
         self.session = session
         self.user_name = user_name
 
-        # 人格信息将在异步方法中获取
-        self.personality_info: Optional[str] = None
-
-        self.bot_name = global_config.bot.nickname if global_config else "Bot"
+        # 使用共享的人格信息助手
+        self._personality_helper = PersonalityHelper(user_name)
+        self.bot_name = self._personality_helper.bot_name
         
         # 加载配置
         from .plugin import get_config
         self._config = get_config()
-    
-    async def _ensure_personality_info(self) -> str:
-        """
-        确保人格信息已加载（异步获取）
-        
-        Returns:
-            人格信息字符串
-        """
-        if self.personality_info is None:
-            try:
-                individuality = get_individuality()
-                base_personality = await individuality.get_personality_block()
-                # 追加 background_story（包含人际关系等重要信息）
-                background_story = self._get_background_story()
-                if background_story:
-                    self.personality_info = f"{base_personality}\n\n【背景信息】\n{background_story}"
-                else:
-                    self.personality_info = base_personality
-                logger.debug(f"[PFC][{self.user_name}]获取人格信息成功: {self.personality_info[:50]}...")
-            except Exception as e:
-                logger.warning(f"[PFC][{self.user_name}]获取人格信息失败: {e}，尝试从配置读取")
-                # 从配置文件读取人格信息作为备选
-                self.personality_info = self._build_personality_from_config()
-        return self.personality_info
-    
-    def _get_background_story(self) -> str:
-        """
-        获取背景故事（包含人际关系等信息）
-        
-        Returns:
-            背景故事字符串
-        """
-        try:
-            if global_config and hasattr(global_config, 'personality'):
-                return getattr(global_config.personality, 'background_story', '') or ''
-        except Exception:
-            pass
-        return ''
-    
-    def _build_personality_from_config(self) -> str:
-        """
-        从配置文件构建人格信息（备选方案）
-        
-        Returns:
-            人格信息字符串
-        """
-        try:
-            bot_name = global_config.bot.nickname if global_config else "Bot"
-            alias_names = global_config.bot.alias_names if global_config else []
-            personality_core = global_config.personality.personality_core if global_config else ""
-            personality_side = global_config.personality.personality_side if global_config else ""
-            identity = global_config.personality.identity if global_config else ""
-            
-            # 构建人格信息
-            parts = [f"你的名字是{bot_name}"]
-            if alias_names:
-                parts.append(f"也有人叫你{','.join(alias_names)}")
-            if personality_core:
-                parts.append(f"你{personality_core}")
-            if personality_side:
-                parts.append(personality_side)
-            if identity:
-                parts.append(identity)
-            
-            result = "，".join(parts)
-            logger.debug(f"[PFC][{self.user_name}]从配置构建人格信息: {result[:50]}...")
-            return result
-        except Exception as e:
-            logger.error(f"[PFC][{self.user_name}]从配置构建人格信息失败: {e}")
-            return "一个友善的AI助手"
 
     async def plan(self) -> Tuple[str, str]:
         """规划下一步行动
@@ -297,8 +234,8 @@ class ActionPlanner:
         Returns:
             Tuple[str, str]: (行动类型, 行动原因)
         """
-        # 确保人格信息已加载
-        personality_info = await self._ensure_personality_info()
+        # 使用共享模块获取人格信息
+        personality_info = await self._personality_helper.get_personality_info()
         
         # 获取 Bot 上次发言时间信息
         time_since_last_bot_message_info = self._get_time_since_last_bot_message()
@@ -306,9 +243,9 @@ class ActionPlanner:
         # 获取超时提示信息
         timeout_context = self._get_timeout_context()
 
-        # 构建通用 Prompt 参数
-        goals_str = self._build_goals_str()
-        knowledge_info_str = self._build_knowledge_info_str()
+        # 构建通用 Prompt 参数（使用共享模块）
+        goals_str = build_goals_string(self.session.conversation_info.goal_list)
+        knowledge_info_str = build_knowledge_string(self.session.conversation_info.knowledge_list)
         chat_history_text = self._get_chat_history_text()
         persona_text = f"{personality_info}"
         action_history_summary, last_action_context = self._build_action_history()
@@ -333,8 +270,8 @@ class ActionPlanner:
                 prompt_template = PROMPT_INITIAL_REPLY_NO_BLOCK
                 logger.debug(f"[PFC][{self.user_name}] 使用 PROMPT_INITIAL_REPLY_NO_BLOCK (首次/非连续回复决策，无屏蔽选项)")
 
-        # 获取当前时间字符串
-        current_time_str = self._get_current_time_str()
+        # 获取当前时间字符串（使用共享模块）
+        current_time_str = get_current_time_str()
         
         # 获取时间信息（与原版 ChatObserver.get_time_info() 保持一致）
         time_info = self.session.get_time_info()
@@ -494,33 +431,6 @@ class ActionPlanner:
 
         return time_since_last_bot_message_info
 
-    def _get_current_time_str(self) -> str:
-        """获取当前时间的人类可读格式"""
-        now = datetime.datetime.now()
-        
-        # 获取星期几
-        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-        weekday = weekday_names[now.weekday()]
-        
-        # 获取时间段描述
-        hour = now.hour
-        if 5 <= hour < 9:
-            time_period = "早上"
-        elif 9 <= hour < 12:
-            time_period = "上午"
-        elif 12 <= hour < 14:
-            time_period = "中午"
-        elif 14 <= hour < 18:
-            time_period = "下午"
-        elif 18 <= hour < 22:
-            time_period = "晚上"
-        else:
-            time_period = "深夜"
-        
-        # 格式化时间字符串
-        time_str = now.strftime(f"%Y年%m月%d日 {weekday} {time_period} %H:%M")
-        return time_str
-
     def _get_timeout_context(self) -> str:
         """获取超时提示信息"""
         timeout_context = ""
@@ -541,100 +451,15 @@ class ActionPlanner:
 
         return timeout_context
 
-    def _build_goals_str(self) -> str:
-        """构建对话目标字符串"""
-        goals_str = ""
-        try:
-            goal_list = self.session.conversation_info.goal_list
-            if goal_list:
-                for goal_reason in goal_list:
-                    if isinstance(goal_reason, dict):
-                        goal = goal_reason.get("goal", "目标内容缺失")
-                        reasoning = goal_reason.get("reasoning", "没有明确原因")
-                    else:
-                        goal = str(goal_reason)
-                        reasoning = "没有明确原因"
-
-                    goal = str(goal) if goal is not None else "目标内容缺失"
-                    reasoning = str(reasoning) if reasoning is not None else "没有明确原因"
-                    goals_str += f"- 目标：{goal}\n  原因：{reasoning}\n"
-
-                if not goals_str:
-                    goals_str = "- 目前没有明确对话目标，请考虑设定一个。\n"
-            else:
-                goals_str = "- 目前没有明确对话目标，请考虑设定一个。\n"
-        except Exception as e:
-            logger.error(f"[PFC][{self.user_name}] 构建对话目标字符串时出错: {e}")
-            goals_str = "- 构建对话目标时出错。\n"
-
-        return goals_str
-
-    def _build_knowledge_info_str(self) -> str:
-        """构建知识信息字符串"""
-        knowledge_info_str = "【已获取的相关知识和记忆】\n"
-        try:
-            knowledge_list = self.session.conversation_info.knowledge_list
-            if knowledge_list:
-                recent_knowledge = knowledge_list[-5:]
-                for i, knowledge_item in enumerate(recent_knowledge):
-                    if isinstance(knowledge_item, dict):
-                        query = knowledge_item.get("query", "未知查询")
-                        knowledge = knowledge_item.get("knowledge", "无知识内容")
-                        source = knowledge_item.get("source", "未知来源")
-                        knowledge_snippet = knowledge[:2000] + "..." if len(knowledge) > 2000 else knowledge
-                        knowledge_info_str += (
-                            f"{i + 1}. 关于 '{query}' 的知识 (来源: {source}):\n   {knowledge_snippet}\n"
-                        )
-                    else:
-                        knowledge_info_str += f"{i + 1}. 发现一条格式不正确的知识记录。\n"
-
-                if not recent_knowledge:
-                    knowledge_info_str += "- 暂无相关知识和记忆。\n"
-            else:
-                knowledge_info_str += "- 暂无相关知识记忆。\n"
-        except Exception as e:
-            logger.error(f"[PFC][{self.user_name}] 构建知识信息字符串时出错: {e}")
-            knowledge_info_str += "- 处理知识列表时出错。\n"
-
-        return knowledge_info_str
-
     def _get_chat_history_text(self) -> str:
-        """获取聊天历史文本
-        
-        PFC 使用自定义的消息格式，使用相对时间格式让 LLM 理解时间上下文。
-        
-        重要：每次调用都重新计算相对时间，避免缓存导致时间不准确。
-        """
-        formatted_blocks = []
-        
-        # 历史消息 - 每次都重新计算相对时间
-        for msg in self.session.observation_info.chat_history[-30:]:
-            msg_type = msg.get("type", "")
-            content = msg.get("content", "")
-            msg_time = msg.get("time", time.time())
-
-            # 使用相对时间格式（每次重新计算）
-            readable_time = self._translate_timestamp(msg_time)
-
-            if msg_type == "user_message":
-                sender = msg.get("user_name", self.user_name)
-                header = f"{readable_time} {sender} 说:"
-            elif msg_type == "bot_message":
-                header = f"{readable_time} {self.bot_name}(你) 说:"
-            else:
-                continue
-            
-            formatted_blocks.append(header)
-            
-            # 添加内容
-            if content:
-                stripped_content = content.strip()
-                if stripped_content:
-                    if stripped_content.endswith("。"):
-                        stripped_content = stripped_content[:-1]
-                    formatted_blocks.append(f"{stripped_content};")
-            
-            formatted_blocks.append("")  # 空行分隔
+        """获取聊天历史文本（使用共享模块）"""
+        # 使用共享模块格式化历史消息
+        chat_history_text = format_chat_history(
+            self.session.observation_info.chat_history,
+            bot_name=self.bot_name,
+            user_name=self.user_name,
+            max_messages=30,
+        )
 
         # 添加新消息（仅添加尚未在历史中的消息）
         new_messages_count = self.session.observation_info.new_messages_count
@@ -648,67 +473,20 @@ class ActionPlanner:
                     if msg_time:
                         processed_times.add(msg_time)
                 
-                new_blocks = []
-                actual_new_count = 0
-                for msg in unprocessed:
-                    msg_time = msg.get("time", time.time())
-                    if msg_time and msg_time in processed_times:
-                        continue
-                    
-                    content = msg.get("content", "")
-                    if not content:
-                        continue
-                    user_name = msg.get("user_name", "用户")
-                    msg_type = msg.get("type", "")
-                    
-                    readable_time = self._translate_timestamp(msg_time)
-                    
-                    if msg_type == "bot_message":
-                        header = f"{readable_time} {self.bot_name}(你) 说:"
-                    else:
-                        header = f"{readable_time} {user_name} 说:"
-                    
-                    new_blocks.append(header)
-                    
-                    stripped_content = content.strip()
-                    if stripped_content:
-                        if stripped_content.endswith("。"):
-                            stripped_content = stripped_content[:-1]
-                        new_blocks.append(f"{stripped_content};")
-                    
-                    new_blocks.append("")
-                    actual_new_count += 1
+                # 使用共享模块格式化新消息
+                new_messages_str, actual_new_count = format_new_messages(
+                    unprocessed,
+                    processed_times,
+                    self.bot_name,
+                )
                 
-                if new_blocks:
-                    new_messages_str = "\n".join(new_blocks).strip()
-                    formatted_blocks.append(f"--- 以下是 {actual_new_count} 条新消息 ---")
-                    formatted_blocks.append(new_messages_str)
+                if new_messages_str and actual_new_count > 0:
+                    chat_history_text += f"\n--- 以下是 {actual_new_count} 条新消息 ---\n{new_messages_str}"
 
-        chat_history_text = "\n".join(formatted_blocks).strip()
-        
         if not chat_history_text:
             chat_history_text = "还没有聊天记录。"
 
         return chat_history_text
-    
-    def _translate_timestamp(self, timestamp: float) -> str:
-        """将时间戳转换为相对时间格式"""
-        now = time.time()
-        diff = now - timestamp
-        
-        if diff < 20:
-            return "刚刚"
-        elif diff < 60:
-            return f"{int(diff)}秒前"
-        elif diff < 3600:
-            return f"{int(diff / 60)}分钟前"
-        elif diff < 86400:
-            return f"{int(diff / 3600)}小时前"
-        elif diff < 86400 * 2:
-            return f"{int(diff / 86400)}天前"
-        else:
-            import datetime
-            return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
     def _build_action_history(self) -> Tuple[str, str]:
         """构建行动历史和上一次行动结果"""

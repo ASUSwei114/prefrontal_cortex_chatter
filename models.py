@@ -16,6 +16,7 @@ PFC - 数据模型
 - 重构数据模型为 dataclass
 - 添加序列化/反序列化方法
 - 修复聊天历史构建逻辑
+- 使用共享模块精简代码
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
@@ -33,6 +34,11 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
+
+# 延迟导入共享模块以避免循环导入
+def _get_translate_timestamp():
+    from .shared import translate_timestamp
+    return translate_timestamp
 
 
 class ConversationState(Enum):
@@ -245,23 +251,9 @@ class ObservationInfo:
         self.chat_history_count = len(self.chat_history)
     
     def _translate_timestamp(self, timestamp: float) -> str:
-        """将时间戳转换为相对时间格式"""
-        now = time.time()
-        diff = now - timestamp
-        
-        if diff < 20:
-            return "刚刚"
-        elif diff < 60:
-            return f"{int(diff)}秒前"
-        elif diff < 3600:
-            return f"{int(diff / 60)}分钟前"
-        elif diff < 86400:
-            return f"{int(diff / 3600)}小时前"
-        elif diff < 86400 * 2:
-            return f"{int(diff / 86400)}天前"
-        else:
-            import datetime
-            return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        """将时间戳转换为相对时间格式（使用共享模块）"""
+        translate_timestamp = _get_translate_timestamp()
+        return translate_timestamp(timestamp)
 
 
 @dataclass

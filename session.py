@@ -16,6 +16,7 @@ PFC - 会话管理
 - 重构会话管理器架构
 - 添加会话持久化功能
 - 添加主动思考触发检测
+- 使用共享模块精简代码
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
@@ -42,6 +43,7 @@ from .models import (
     ObservationInfo,
     WaitingConfig,
 )
+from .shared import translate_timestamp
 
 logger = get_logger("pfc_session")
 
@@ -248,22 +250,8 @@ class PFCSession:
         self.update_activity()
     
     def _translate_timestamp(self, timestamp: float) -> str:
-        """将时间戳转换为相对时间格式"""
-        now = time.time()
-        diff = now - timestamp
-        
-        if diff < 20:
-            return "刚刚"
-        elif diff < 60:
-            return f"{int(diff)}秒前"
-        elif diff < 3600:
-            return f"{int(diff / 60)}分钟前"
-        elif diff < 86400:
-            return f"{int(diff / 3600)}小时前"
-        elif diff < 86400 * 2:
-            return f"{int(diff / 86400)}天前"
-        else:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+        """将时间戳转换为相对时间格式（使用共享模块）"""
+        return translate_timestamp(timestamp)
     
     def get_time_info(self) -> str:
         """

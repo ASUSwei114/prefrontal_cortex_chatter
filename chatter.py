@@ -296,7 +296,7 @@ class PrefrontalCortexChatter(BaseChatter):
         使用相对时间格式（如"刚刚"、"5分钟前"），与原版 MaiM-with-u 保持一致，
         让 LLM 能够理解消息的时间上下文。
         """
-        from .replyer import translate_timestamp_to_human_readable
+        from .shared import translate_timestamp
         from src.config.config import global_config
         
         formatted_blocks = []
@@ -309,7 +309,7 @@ class PrefrontalCortexChatter(BaseChatter):
             msg_time = msg.get("time", time.time())
 
             # 使用相对时间格式
-            readable_time = translate_timestamp_to_human_readable(msg_time, mode="relative")
+            readable_time = translate_timestamp(msg_time, mode="relative")
 
             if msg_type == "user_message":
                 sender = msg.get("user_name", user_name)

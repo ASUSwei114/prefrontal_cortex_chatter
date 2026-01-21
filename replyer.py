@@ -17,6 +17,7 @@ PFC回复生成器模块
 - 重构人格信息获取逻辑
 - 恢复原版 Prompt 模板的"简短20字以内"约束
 - 修复聊天历史构建问题
+- 使用共享模块精简代码
 
 本项目遵循 GNU General Public License v3.0 许可证。
 详见 LICENSE 文件。
@@ -27,13 +28,19 @@ PFC回复生成器模块
 """
 
 import time
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from src.common.logger import get_logger
 from src.plugin_system.apis import llm_api
-from src.individuality.individuality import get_individuality
 from src.config.config import global_config
 
 from .models import ObservationInfo, ConversationInfo
+from .shared import (
+    PersonalityHelper,
+    get_current_time_str,
+    translate_timestamp,
+    build_goals_string,
+    build_knowledge_string,
+)
 
 # PFCConfig 类型注解使用 TYPE_CHECKING
 from typing import TYPE_CHECKING
@@ -41,42 +48,6 @@ if TYPE_CHECKING:
     from .plugin import PFCConfig
 
 logger = get_logger("PFC-Replyer")
-
-
-def translate_timestamp_to_human_readable(timestamp: float, mode: str = "relative") -> str:
-    """
-    将时间戳转换为人类可读的时间格式
-    
-    移植自原版 MaiM-with-u 的 src/plugins/chat/utils.py
-    
-    Args:
-        timestamp: 时间戳
-        mode: 转换模式，"normal"为标准格式，"relative"为相对时间格式
-        
-    Returns:
-        str: 格式化后的时间字符串
-    """
-    if mode == "normal":
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-    elif mode == "relative":
-        now = time.time()
-        diff = now - timestamp
-        
-        if diff < 20:
-            return "刚刚"
-        elif diff < 60:
-            return f"{int(diff)}秒前"
-        elif diff < 3600:
-            return f"{int(diff / 60)}分钟前"
-        elif diff < 86400:
-            return f"{int(diff / 3600)}小时前"
-        elif diff < 86400 * 2:
-            return f"{int(diff / 86400)}天前"
-        else:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-    else:  # mode = "lite" or unknown
-        # 只返回时分秒格式
-        return time.strftime("%H:%M:%S", time.localtime(timestamp))
 
 
 # ============== Prompt 模板 ==============
@@ -199,83 +170,11 @@ class ReplyGenerator:
         self.user_name = user_name
         self.config = get_config()
         
-        # 人格信息将在异步方法中获取
-        self.personality_info: Optional[str] = None
-        
-        # 获取机器人名称
-        self.bot_name = global_config.bot.nickname if global_config else "Bot"
+        # 使用共享的人格信息助手
+        self._personality_helper = PersonalityHelper(user_name)
+        self.bot_name = self._personality_helper.bot_name
         
         logger.debug(f"[私聊][{user_name}]回复生成器初始化完成")
-    
-    async def _ensure_personality_info(self) -> str:
-        """
-        确保人格信息已加载（异步获取）
-        
-        Returns:
-            人格信息字符串
-        """
-        if self.personality_info is None:
-            try:
-                individuality = get_individuality()
-                base_personality = await individuality.get_personality_block()
-                # 追加 background_story（包含人际关系等重要信息）
-                background_story = self._get_background_story()
-                if background_story:
-                    self.personality_info = f"{base_personality}\n\n【背景信息】\n{background_story}"
-                else:
-                    self.personality_info = base_personality
-                logger.debug(f"[私聊][{self.user_name}]获取人格信息成功: {self.personality_info[:50]}...")
-            except Exception as e:
-                logger.warning(f"[私聊][{self.user_name}]获取人格信息失败: {e}，尝试从配置读取")
-                # 从配置文件读取人格信息作为备选
-                self.personality_info = self._build_personality_from_config()
-        return self.personality_info
-    
-    def _get_background_story(self) -> str:
-        """
-        获取背景故事（包含人际关系等信息）
-        
-        Returns:
-            背景故事字符串
-        """
-        try:
-            if global_config and hasattr(global_config, 'personality'):
-                return getattr(global_config.personality, 'background_story', '') or ''
-        except Exception:
-            pass
-        return ''
-    
-    def _build_personality_from_config(self) -> str:
-        """
-        从配置文件构建人格信息（备选方案）
-        
-        Returns:
-            人格信息字符串
-        """
-        try:
-            bot_name = global_config.bot.nickname if global_config else "Bot"
-            alias_names = global_config.bot.alias_names if global_config else []
-            personality_core = global_config.personality.personality_core if global_config else ""
-            personality_side = global_config.personality.personality_side if global_config else ""
-            identity = global_config.personality.identity if global_config else ""
-            
-            # 构建人格信息
-            parts = [f"你的名字是{bot_name}"]
-            if alias_names:
-                parts.append(f"也有人叫你{','.join(alias_names)}")
-            if personality_core:
-                parts.append(f"你{personality_core}")
-            if personality_side:
-                parts.append(personality_side)
-            if identity:
-                parts.append(identity)
-            
-            result = "，".join(parts)
-            logger.debug(f"[私聊][{self.user_name}]从配置构建人格信息: {result[:50]}...")
-            return result
-        except Exception as e:
-            logger.error(f"[私聊][{self.user_name}]从配置构建人格信息失败: {e}")
-            return "一个友善的AI助手"
     
     async def generate(self, action_type: str) -> str:
         """
@@ -348,7 +247,7 @@ class ReplyGenerator:
         conversation_info: ConversationInfo
     ) -> Dict[str, str]:
         """
-        构建Prompt参数
+        构建Prompt参数（使用共享模块）
         
         Args:
             observation_info: 观察信息
@@ -357,14 +256,16 @@ class ReplyGenerator:
         Returns:
             Prompt参数字典
         """
-        # 确保人格信息已加载
-        personality_info = await self._ensure_personality_info()
+        # 使用共享模块获取人格信息
+        personality_info = await self._personality_helper.get_personality_info()
         
-        # 构建对话目标字符串
-        goals_str = self._build_goals_string(conversation_info.goal_list)
+        # 使用共享模块构建对话目标字符串
+        goals_str = build_goals_string(conversation_info.goal_list)
         
-        # 构建知识信息字符串
-        knowledge_info_str = self._build_knowledge_string(conversation_info)
+        # 使用共享模块构建知识信息字符串
+        knowledge_info_str = build_knowledge_string(
+            getattr(conversation_info, 'knowledge_list', None)
+        )
         
         # 构建聊天历史文本
         chat_history_text = await self._build_chat_history_text(observation_info)
@@ -372,11 +273,11 @@ class ReplyGenerator:
         # 构建人设文本
         persona_text = f"{personality_info}"
         
-        # 获取回复风格
-        reply_style = self._get_reply_style()
+        # 使用共享模块获取回复风格
+        reply_style = self._personality_helper.get_reply_style()
         
-        # 获取当前时间字符串
-        current_time_str = self._get_current_time_str()
+        # 使用共享模块获取当前时间字符串
+        current_time_str = get_current_time_str()
         
         return {
             "persona_text": persona_text,
@@ -386,141 +287,6 @@ class ReplyGenerator:
             "reply_style": reply_style,
             "current_time_str": current_time_str,
         }
-    
-    def _get_reply_style(self) -> str:
-        """
-        从 bot_config 获取回复风格配置
-        
-        Returns:
-            回复风格字符串
-        """
-        try:
-            if global_config and hasattr(global_config, 'personality'):
-                reply_style = getattr(global_config.personality, 'reply_style', None)
-                if reply_style:
-                    logger.debug(f"[私聊][{self.user_name}]获取回复风格: {reply_style[:50]}...")
-                    return reply_style
-        except Exception as e:
-            logger.warning(f"[私聊][{self.user_name}]获取回复风格失败: {e}")
-        
-        # 默认回复风格
-        return "回复简短自然，像正常聊天一样。"
-    
-    def _get_current_time_str(self) -> str:
-        """获取当前时间的人类可读格式"""
-        import datetime
-        now = datetime.datetime.now()
-        
-        # 获取星期几
-        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-        weekday = weekday_names[now.weekday()]
-        
-        # 获取时间段描述
-        hour = now.hour
-        if 5 <= hour < 9:
-            time_period = "早上"
-        elif 9 <= hour < 12:
-            time_period = "上午"
-        elif 12 <= hour < 14:
-            time_period = "中午"
-        elif 14 <= hour < 18:
-            time_period = "下午"
-        elif 18 <= hour < 22:
-            time_period = "晚上"
-        else:
-            time_period = "深夜"
-        
-        # 格式化时间字符串
-        time_str = now.strftime(f"%Y年%m月%d日 {weekday} {time_period} %H:%M")
-        return time_str
-    
-    def _build_goals_string(self, goal_list: Optional[List[Dict[str, Any]]]) -> str:
-        """
-        构建对话目标字符串
-        
-        Args:
-            goal_list: 目标列表
-            
-        Returns:
-            格式化的目标字符串
-        """
-        if not goal_list:
-            return "- 目前没有明确对话目标\n"
-        
-        goals_str = ""
-        for goal_item in goal_list:
-            if isinstance(goal_item, dict):
-                goal = goal_item.get("goal", "目标内容缺失")
-                reasoning = goal_item.get("reasoning", "没有明确原因")
-            else:
-                goal = str(goal_item)
-                reasoning = "没有明确原因"
-            
-            goal = str(goal) if goal is not None else "目标内容缺失"
-            reasoning = str(reasoning) if reasoning is not None else "没有明确原因"
-            goals_str += f"- 目标：{goal}\n  原因：{reasoning}\n"
-        
-        return goals_str
-    
-    def _build_knowledge_string(self, conversation_info: ConversationInfo) -> str:
-        """
-        构建知识信息字符串
-        
-        Args:
-            conversation_info: 对话信息
-            
-        Returns:
-            格式化的知识字符串
-        """
-        knowledge_info_str = "【供参考的相关知识和记忆】\n"
-        
-        try:
-            knowledge_list = getattr(conversation_info, 'knowledge_list', None)
-            
-            if not knowledge_list:
-                knowledge_info_str += "- 暂无。\n"
-                return knowledge_info_str
-            
-            # 最多只显示最近的 5 条知识
-            recent_knowledge = knowledge_list[-5:]
-            
-            for i, knowledge_item in enumerate(recent_knowledge):
-                if isinstance(knowledge_item, dict):
-                    query = knowledge_item.get("query", "未知查询")
-                    knowledge = knowledge_item.get("knowledge", "无知识内容")
-                    source = knowledge_item.get("source", "未知来源")
-                    
-                    # 只取知识内容的前 2000 个字
-                    knowledge_snippet = (
-                        knowledge[:2000] + "..." 
-                        if len(knowledge) > 2000 
-                        else knowledge
-                    )
-                    knowledge_info_str += (
-                        f"{i + 1}. 关于 '{query}' (来源: {source}): "
-                        f"{knowledge_snippet}\n"
-                    )
-                else:
-                    knowledge_info_str += (
-                        f"{i + 1}. 发现一条格式不正确的知识记录。\n"
-                    )
-            
-            if not recent_knowledge:
-                knowledge_info_str += "- 暂无。\n"
-                
-        except AttributeError:
-            logger.warning(
-                f"[私聊][{self.user_name}]"
-                "ConversationInfo 对象可能缺少 knowledge_list 属性。"
-            )
-            knowledge_info_str += "- 获取知识列表时出错。\n"
-        except Exception as e:
-            logger.error(
-                f"[私聊][{self.user_name}]构建知识信息字符串时出错: {e}"
-            )
-            knowledge_info_str += "- 处理知识列表时出错。\n"
-        
-        return knowledge_info_str
     
     async def _build_chat_history_text(
         self,
@@ -564,10 +330,7 @@ class ReplyGenerator:
         timestamp_mode: str = "relative"
     ) -> str:
         """
-        格式化消息列表为可读文本
-        
-        移植自原版 MaiM-with-u 的 build_readable_messages 函数，
-        添加相对时间显示功能，让 LLM 知道每条消息是什么时候发送的。
+        格式化消息列表为可读文本（使用共享模块）
         
         Args:
             messages: 消息列表
@@ -600,8 +363,8 @@ class ReplyGenerator:
             else:
                 sender_name = user_name or sender_name
             
-            # 格式化时间
-            readable_time = translate_timestamp_to_human_readable(timestamp, mode=timestamp_mode)
+            # 使用共享模块格式化时间
+            readable_time = translate_timestamp(timestamp, mode=timestamp_mode)
             
             # 构建消息块（模仿原版格式）
             header = f"{readable_time} {sender_name} 说:"
