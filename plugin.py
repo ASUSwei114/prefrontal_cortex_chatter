@@ -143,7 +143,6 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
                 wait_timeout_seconds=w.get("wait_timeout_seconds", 300),
                 block_ignore_seconds=w.get("block_ignore_seconds", 1800),
                 enable_block_action=w.get("enable_block_action", True),
-                clear_goals_on_timeout=w.get("clear_goals_on_timeout", False),
             )
 
         if "session" in cfg:
@@ -202,7 +201,6 @@ def _load_from_global_config() -> PFCConfig:
                     wait_timeout_seconds=getattr(w, "wait_timeout_seconds", 300),
                     block_ignore_seconds=getattr(w, "block_ignore_seconds", 1800),
                     enable_block_action=getattr(w, "enable_block_action", True),
-                    clear_goals_on_timeout=getattr(w, "clear_goals_on_timeout", False),
                 )
 
             if hasattr(pfc_cfg, "session"):
@@ -325,11 +323,6 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 type=bool,
                 default=True,
                 description="是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能",
-            ),
-            "clear_goals_on_timeout": ConfigField(
-                type=bool,
-                default=False,
-                description="等待超时时是否清空旧目标。true=清空旧目标只保留超时提示，false=保留旧目标并追加超时提示",
             ),
         },
         "session": {
