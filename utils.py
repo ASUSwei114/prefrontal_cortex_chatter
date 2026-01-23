@@ -77,27 +77,26 @@ def extract_json_from_text(text: str) -> Optional[dict]:
     
     text = text.strip()
     
-    # 尝试直接解析
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    # 定义提取模式：直接解析、markdown代码块、花括号包裹
+    patterns = [
+        (lambda t: t, None),  # 直接解析
+        (lambda t: re.findall(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', t), 'strip'),
+        (lambda t: re.findall(r'\{[\s\S]*\}', t), None)
+    ]
     
-    # 尝试从markdown代码块提取
-    json_block_pattern = r'```(?:json)?\s*\n?([\s\S]*?)\n?```'
-    matches = re.findall(json_block_pattern, text)
-    for match in matches:
+    for pattern_func, process in patterns:
         try:
-            return json.loads(match.strip())
-        except json.JSONDecodeError:
-            continue
-    
-    # 尝试找到 { } 包裹的内容
-    brace_pattern = r'\{[\s\S]*\}'
-    matches = re.findall(brace_pattern, text)
-    for match in matches:
-        try:
-            return json.loads(match)
+            if process is None and callable(pattern_func):
+                return json.loads(pattern_func(text))
+            
+            matches = pattern_func(text)
+            if isinstance(matches, list):
+                for match in matches:
+                    try:
+                        content = match.strip() if process == 'strip' else match
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        continue
         except json.JSONDecodeError:
             continue
     
@@ -120,35 +119,22 @@ def extract_json_array_from_text(text: str) -> Optional[list]:
     
     text = text.strip()
     
-    # 尝试直接解析
-    try:
-        result = json.loads(text)
-        if isinstance(result, list):
-            return result
-    except json.JSONDecodeError:
-        pass
+    # 定义提取模式
+    patterns = [
+        lambda t: t,  # 直接解析
+        lambda t: [m.strip() for m in re.findall(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', t)],
+        lambda t: re.findall(r'\[[\s\S]*\]', t)
+    ]
     
-    # 尝试从markdown代码块提取
-    json_block_pattern = r'```(?:json)?\s*\n?([\s\S]*?)\n?```'
-    matches = re.findall(json_block_pattern, text)
-    for match in matches:
-        try:
-            result = json.loads(match.strip())
-            if isinstance(result, list):
-                return result
-        except json.JSONDecodeError:
-            continue
-    
-    # 尝试找到 [ ] 包裹的内容
-    bracket_pattern = r'\[[\s\S]*\]'
-    matches = re.findall(bracket_pattern, text)
-    for match in matches:
-        try:
-            result = json.loads(match)
-            if isinstance(result, list):
-                return result
-        except json.JSONDecodeError:
-            continue
+    for pattern_func in patterns:
+        candidates = [pattern_func(text)] if not isinstance(pattern_func(text), list) else pattern_func(text)
+        for candidate in candidates:
+            try:
+                result = json.loads(candidate)
+                if isinstance(result, list):
+                    return result
+            except (json.JSONDecodeError, TypeError):
+                continue
     
     return None
 
@@ -184,20 +170,17 @@ def format_time_delta(seconds: float) -> str:
     Returns:
         格式化的时间字符串
     """
-    if seconds < 60:
-        return f"{int(seconds)}秒"
-    elif seconds < 3600:
-        minutes = int(seconds / 60)
-        secs = int(seconds % 60)
-        return f"{minutes}分{secs}秒" if secs > 0 else f"{minutes}分钟"
-    elif seconds < 86400:
-        hours = int(seconds / 3600)
-        minutes = int((seconds % 3600) / 60)
-        return f"{hours}小时{minutes}分" if minutes > 0 else f"{hours}小时"
-    else:
-        days = int(seconds / 86400)
-        hours = int((seconds % 86400) / 3600)
-        return f"{days}天{hours}小时" if hours > 0 else f"{days}天"
+    units = [(86400, "天", 3600), (3600, "小时", 60), (60, "分", 1), (1, "秒", 0)]
+    
+    for divisor, unit, sub_divisor in units:
+        if seconds >= divisor:
+            main = int(seconds / divisor)
+            if sub_divisor:
+                sub = int((seconds % divisor) / sub_divisor)
+                return f"{main}{unit}{sub}{units[units.index((divisor, unit, sub_divisor)) + 1][1]}" if sub > 0 else f"{main}{unit}"
+            return f"{main}{unit}"
+    
+    return f"{int(seconds)}秒"
 
 
 def clean_llm_response(text: str) -> str:
@@ -292,25 +275,19 @@ def extract_thinking_and_content(text: str) -> tuple[str, str]:
     if not text:
         return "", ""
     
-    thinking = ""
-    content = text
+    patterns = [
+        (r'<thinking>([\s\S]*?)</thinking>', re.IGNORECASE),
+        (r'\[思考\]([\s\S]*?)\[/思考\]', 0)
+    ]
     
-    # 尝试提取 <thinking> 标签
-    thinking_pattern = r'<thinking>([\s\S]*?)</thinking>'
-    match = re.search(thinking_pattern, text, re.IGNORECASE)
-    if match:
-        thinking = match.group(1).strip()
-        content = re.sub(thinking_pattern, '', text, flags=re.IGNORECASE).strip()
-    
-    # 尝试提取 [思考] 标签
-    if not thinking:
-        thinking_pattern_cn = r'\[思考\]([\s\S]*?)\[/思考\]'
-        match = re.search(thinking_pattern_cn, text)
+    for pattern, flags in patterns:
+        match = re.search(pattern, text, flags) if flags else re.search(pattern, text)
         if match:
             thinking = match.group(1).strip()
-            content = re.sub(thinking_pattern_cn, '', text).strip()
+            content = re.sub(pattern, '', text, flags=flags if flags else 0).strip()
+            return thinking, content
     
-    return thinking, content
+    return "", text
 
 
 def parse_action_from_response(text: str) -> Optional[dict]:
@@ -328,17 +305,14 @@ def parse_action_from_response(text: str) -> Optional[dict]:
     if json_obj is None:
         return None
     
-    # 验证必要字段
+    # 验证必要字段，尝试多个可能的字段名
     if "action_type" not in json_obj:
-        # 尝试其他可能的字段名
-        for alt_key in ["action", "type", "行动类型"]:
-            if alt_key in json_obj:
-                json_obj["action_type"] = json_obj[alt_key]
-                break
-    
-    if "action_type" not in json_obj:
-        logger.warning(f"响应中缺少action_type字段: {json_obj}")
-        return None
+        action_type = next((json_obj[k] for k in ["action", "type", "行动类型"] if k in json_obj), None)
+        if action_type:
+            json_obj["action_type"] = action_type
+        else:
+            logger.warning(f"响应中缺少action_type字段: {json_obj}")
+            return None
     
     return json_obj
 

@@ -65,13 +65,12 @@ class WaitingConfig:
     wait_timeout_seconds: int = 300
     block_ignore_seconds: int = 1800
     enable_block_action: bool = True  # 是否启用 block_and_ignore 动作
+    clear_goals_on_timeout: bool = False  # 等待超时时是否清空旧目标
 
 
 @dataclass
 class SessionConfig:
     """会话配置"""
-    storage_backend: str = "file"
-    session_dir: str = "prefrontal_cortex_chatter/sessions"
     session_expire_seconds: int = 86400 * 7
     max_history_entries: int = 100
     initial_history_limit: int = 30
@@ -144,13 +143,12 @@ def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
                 wait_timeout_seconds=w.get("wait_timeout_seconds", 300),
                 block_ignore_seconds=w.get("block_ignore_seconds", 1800),
                 enable_block_action=w.get("enable_block_action", True),
+                clear_goals_on_timeout=w.get("clear_goals_on_timeout", False),
             )
 
         if "session" in cfg:
             s = cfg["session"]
             config.session = SessionConfig(
-                storage_backend=s.get("storage_backend", "file"),
-                session_dir=s.get("session_dir", "prefrontal_cortex_chatter/sessions"),
                 session_expire_seconds=s.get("session_expire_seconds", 86400 * 7),
                 max_history_entries=s.get("max_history_entries", 100),
                 initial_history_limit=s.get("initial_history_limit", 30),
@@ -204,13 +202,12 @@ def _load_from_global_config() -> PFCConfig:
                     wait_timeout_seconds=getattr(w, "wait_timeout_seconds", 300),
                     block_ignore_seconds=getattr(w, "block_ignore_seconds", 1800),
                     enable_block_action=getattr(w, "enable_block_action", True),
+                    clear_goals_on_timeout=getattr(w, "clear_goals_on_timeout", False),
                 )
 
             if hasattr(pfc_cfg, "session"):
                 s = pfc_cfg.session
                 config.session = SessionConfig(
-                    storage_backend=getattr(s, "storage_backend", "file"),
-                    session_dir=getattr(s, "session_dir", "prefrontal_cortex_chatter/sessions"),
                     session_expire_seconds=getattr(s, "session_expire_seconds", 86400 * 7),
                     max_history_entries=getattr(s, "max_history_entries", 100),
                     initial_history_limit=getattr(s, "initial_history_limit", 30),
@@ -265,7 +262,7 @@ def _get_reply_action_class():
 
 
 # 配置文件版本号 - 更新配置结构时递增此版本
-CONFIG_VERSION = "1.3.0"
+CONFIG_VERSION = "1.4.0"
 
 
 @register_plugin
@@ -329,18 +326,13 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 default=True,
                 description="是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能",
             ),
+            "clear_goals_on_timeout": ConfigField(
+                type=bool,
+                default=False,
+                description="等待超时时是否清空旧目标。true=清空旧目标只保留超时提示，false=保留旧目标并追加超时提示",
+            ),
         },
         "session": {
-            "storage_backend": ConfigField(
-                type=str,
-                default="file",
-                description="存储后端：file（JSON文件）或 database（使用 MoFox 数据库，支持 SQLite/PostgreSQL）",
-            ),
-            "session_dir": ConfigField(
-                type=str,
-                default="prefrontal_cortex_chatter/sessions",
-                description="会话数据存储目录（相对于 data/，仅 file 后端使用）",
-            ),
             "session_expire_seconds": ConfigField(
                 type=int,
                 default=604800,
@@ -414,14 +406,12 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             logger.info("[PFC] 插件已禁用")
             return
 
-        # 如果使用数据库后端，确保表已创建
-        if config.session.storage_backend == "database":
-            await self._ensure_database_tables()
+        # 确保数据库表已创建
+        await self._ensure_database_tables()
 
         logger.info(
             f"[PFC] 插件已加载 "
-            f"(配置版本: {self.config.get('inner', {}).get('version', 'unknown')}, "
-            f"存储后端: {config.session.storage_backend})"
+            f"(配置版本: {self.config.get('inner', {}).get('version', 'unknown')})"
         )
 
     async def _ensure_database_tables(self):
@@ -437,10 +427,7 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             logger.info("[PFC] 数据库表初始化完成")
         except Exception as e:
             logger.error(f"[PFC] 数据库表初始化失败: {e}")
-            logger.warning("[PFC] 将回退到文件存储后端")
-            # 回退到文件存储
-            config = get_config()
-            config.session.storage_backend = "file"
+            raise RuntimeError(f"PFC 数据库初始化失败: {e}")
 
     async def on_plugin_unloaded(self):
         """插件卸载时"""

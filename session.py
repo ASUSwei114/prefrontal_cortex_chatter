@@ -29,10 +29,7 @@ PFC - 会话管理
 """
 
 import asyncio
-import json
-import os
 import time
-from pathlib import Path
 from typing import Optional
 
 from src.common.logger import get_logger
@@ -444,9 +441,7 @@ class SessionManager:
     会话管理器
 
     负责会话的创建、获取、保存和清理。
-    支持两种存储后端：
-    - file: JSON 文件存储（默认）
-    - database: 数据库存储（支持 SQLite/PostgreSQL）
+    使用数据库存储（支持 SQLite/PostgreSQL）。
     """
 
     _instance: Optional["SessionManager"] = None
@@ -458,17 +453,13 @@ class SessionManager:
 
     def __init__(
         self,
-        data_dir: str = "data/prefrontal_cortex_chatter/sessions",
         max_session_age_days: int = 30,
-        storage_backend: str = "file",
     ):
         if hasattr(self, "_initialized") and self._initialized:
             return
 
         self._initialized = True
-        self.data_dir = Path(data_dir)
         self.max_session_age_days = max_session_age_days
-        self.storage_backend = storage_backend
 
         # 内存缓存
         self._sessions: dict[str, PFCSession] = {}
@@ -477,17 +468,7 @@ class SessionManager:
         # 数据库存储后端（延迟初始化）
         self._db_storage = None
 
-        # 根据存储后端初始化
-        if storage_backend == "file":
-            # 确保数据目录存在
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"SessionManager 初始化完成 (file 后端): {self.data_dir}")
-        elif storage_backend == "database":
-            logger.info("SessionManager 初始化完成 (database 后端)")
-        else:
-            logger.warning(f"未知的存储后端 '{storage_backend}'，使用 file 后端")
-            self.storage_backend = "file"
-            self.data_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("SessionManager 初始化完成 (database 后端)")
 
     def _get_db_storage(self):
         """获取数据库存储后端（延迟初始化）"""
@@ -502,11 +483,6 @@ class SessionManager:
             self._locks[user_id] = asyncio.Lock()
         return self._locks[user_id]
 
-    def _get_file_path(self, user_id: str) -> Path:
-        """获取会话文件路径"""
-        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in user_id)
-        return self.data_dir / f"{safe_id}.json"
-
     async def get_session(self, user_id: str, stream_id: str) -> PFCSession:
         """获取或创建会话"""
         async with self._get_lock(user_id):
@@ -516,11 +492,8 @@ class SessionManager:
                 session.stream_id = stream_id
                 return session
 
-            # 根据存储后端加载
-            if self.storage_backend == "database":
-                session = await self._load_from_database(user_id)
-            else:
-                session = await self._load_from_file(user_id)
+            # 从数据库加载
+            session = await self._load_from_database(user_id)
 
             if session:
                 session.stream_id = stream_id
@@ -532,22 +505,6 @@ class SessionManager:
             self._sessions[user_id] = session
             logger.info(f"创建新会话: {user_id}")
             return session
-
-    async def _load_from_file(self, user_id: str) -> PFCSession | None:
-        """从文件加载会话"""
-        file_path = self._get_file_path(user_id)
-        if not file_path.exists():
-            return None
-
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                data = json.load(f)
-            session = PFCSession.from_dict(data)
-            logger.debug(f"从文件加载会话: {user_id}")
-            return session
-        except Exception as e:
-            logger.error(f"加载会话失败 {user_id}: {e}")
-            return None
 
     async def _load_from_database(self, user_id: str) -> PFCSession | None:
         """从数据库加载会话"""
@@ -570,28 +527,7 @@ class SessionManager:
                 return False
 
             session = self._sessions[user_id]
-
-            if self.storage_backend == "database":
-                return await self._save_to_database(session)
-            else:
-                return await self._save_to_file(session)
-
-    async def _save_to_file(self, session: PFCSession) -> bool:
-        """保存会话到文件"""
-        file_path = self._get_file_path(session.user_id)
-
-        try:
-            data = session.to_dict()
-            temp_path = file_path.with_suffix(".json.tmp")
-
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-            os.replace(temp_path, file_path)
-            return True
-        except Exception as e:
-            logger.error(f"保存会话到文件失败 {session.user_id}: {e}")
-            return False
+            return await self._save_to_database(session)
 
     async def _save_to_database(self, session: PFCSession) -> bool:
         """保存会话到数据库"""
@@ -630,20 +566,9 @@ _session_manager: SessionManager | None = None
 def get_session_manager() -> SessionManager:
     """获取全局会话管理器
     
-    根据配置自动选择存储后端：
-    - file: JSON 文件存储（默认）
-    - database: 数据库存储（使用 MoFox 数据库，支持 SQLite/PostgreSQL）
+    使用数据库存储（MoFox 数据库，支持 SQLite/PostgreSQL）。
     """
     global _session_manager
     if _session_manager is None:
-        from .plugin import get_config
-        config = get_config()
-        
-        storage_backend = config.session.storage_backend
-        session_dir = f"data/{config.session.session_dir}"
-        
-        _session_manager = SessionManager(
-            data_dir=session_dir,
-            storage_backend=storage_backend,
-        )
+        _session_manager = SessionManager()
     return _session_manager

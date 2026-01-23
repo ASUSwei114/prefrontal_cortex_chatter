@@ -61,26 +61,24 @@ def translate_timestamp(timestamp: float, mode: str = "relative") -> str:
     Returns:
         格式化后的时间字符串
     """
-    if mode == "normal":
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-    elif mode == "relative":
-        now = time.time()
-        diff = now - timestamp
-        
-        if diff < 20:
-            return "刚刚"
-        elif diff < 60:
-            return f"{int(diff)}秒前"
-        elif diff < 3600:
-            return f"{int(diff / 60)}分钟前"
-        elif diff < 86400:
-            return f"{int(diff / 3600)}小时前"
-        elif diff < 86400 * 2:
-            return f"{int(diff / 86400)}天前"
-        else:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-    else:  # mode = "lite" or unknown
-        return time.strftime("%H:%M:%S", time.localtime(timestamp))
+    formats = {
+        "normal": "%Y-%m-%d %H:%M:%S",
+        "lite": "%H:%M:%S"
+    }
+    
+    if mode in formats:
+        return time.strftime(formats[mode], time.localtime(timestamp))
+    
+    # relative mode
+    diff = time.time() - timestamp
+    thresholds = [(20, "刚刚"), (60, f"{int(diff)}秒前"), (3600, f"{int(diff/60)}分钟前"),
+                  (86400, f"{int(diff/3600)}小时前"), (86400*2, f"{int(diff/86400)}天前")]
+    
+    for threshold, result in thresholds:
+        if diff < threshold:
+            return result
+    
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
 
 def get_current_time_str() -> str:
@@ -182,11 +180,9 @@ class PersonalityHelper:
             背景故事字符串
         """
         try:
-            if global_config and hasattr(global_config, 'personality'):
-                return getattr(global_config.personality, 'background_story', '') or ''
+            return getattr(global_config.personality, 'background_story', '') if global_config and hasattr(global_config, 'personality') else ''
         except Exception:
-            pass
-        return ''
+            return ''
     
     def _build_personality_from_config(self) -> str:
         """
@@ -229,15 +225,13 @@ class PersonalityHelper:
             回复风格字符串
         """
         try:
-            if global_config and hasattr(global_config, 'personality'):
-                reply_style = getattr(global_config.personality, 'reply_style', None)
-                if reply_style:
-                    logger.debug(f"[PFC][{self.user_name}] 获取回复风格: {reply_style[:50]}...")
-                    return reply_style
+            reply_style = getattr(global_config.personality, 'reply_style', None) if global_config and hasattr(global_config, 'personality') else None
+            if reply_style:
+                logger.debug(f"[PFC][{self.user_name}] 获取回复风格: {reply_style[:50]}...")
+                return reply_style
         except Exception as e:
             logger.warning(f"[PFC][{self.user_name}] 获取回复风格失败: {e}")
         
-        # 默认回复风格
         return "回复简短自然，像正常聊天一样。"
 
 
@@ -258,23 +252,16 @@ def build_goals_string(goal_list: list[dict[str, Any]] | None) -> str:
     if not goal_list:
         return "- 目前没有明确对话目标，请考虑设定一个。\n"
     
-    goals_str = ""
-    for goal_item in goal_list:
-        if isinstance(goal_item, dict):
-            goal = goal_item.get("goal", "目标内容缺失")
-            reasoning = goal_item.get("reasoning", "没有明确原因")
+    goals = []
+    for item in goal_list:
+        if isinstance(item, dict):
+            goal = str(item.get("goal") or "目标内容缺失")
+            reasoning = str(item.get("reasoning") or "没有明确原因")
         else:
-            goal = str(goal_item)
-            reasoning = "没有明确原因"
-        
-        goal = str(goal) if goal is not None else "目标内容缺失"
-        reasoning = str(reasoning) if reasoning is not None else "没有明确原因"
-        goals_str += f"- 目标：{goal}\n  原因：{reasoning}\n"
+            goal, reasoning = str(item), "没有明确原因"
+        goals.append(f"- 目标：{goal}\n  原因：{reasoning}\n")
     
-    if not goals_str:
-        goals_str = "- 目前没有明确对话目标，请考虑设定一个。\n"
-    
-    return goals_str
+    return "".join(goals) if goals else "- 目前没有明确对话目标，请考虑设定一个。\n"
 
 
 def build_knowledge_string(knowledge_list: list[dict[str, Any]] | None) -> str:
@@ -347,45 +334,27 @@ def format_chat_history(
     if not chat_history:
         return "还没有聊天记录。"
     
-    formatted_blocks = []
-    
-    # 只取最近的消息
-    recent_history = chat_history[-max_messages:]
-    
-    for msg in recent_history:
+    def format_message(msg: dict) -> list[str]:
         msg_type = msg.get("type", "")
-        content = msg.get("content", "")
-        msg_time = msg.get("time", time.time())
-        
-        # 使用相对时间格式
-        readable_time = translate_timestamp(msg_time)
+        content = msg.get("content", "").strip()
+        readable_time = translate_timestamp(msg.get("time", time.time()))
         
         if msg_type == "user_message":
-            sender = msg.get("user_name", user_name)
-            header = f"{readable_time} {sender} 说:"
+            header = f"{readable_time} {msg.get('user_name', user_name)} 说:"
         elif msg_type == "bot_message":
             header = f"{readable_time} {bot_name}(你) 说:"
         else:
-            continue
+            return []
         
-        formatted_blocks.append(header)
-        
-        # 添加内容
+        result = [header]
         if content:
-            stripped_content = content.strip()
-            if stripped_content:
-                if stripped_content.endswith("。"):
-                    stripped_content = stripped_content[:-1]
-                formatted_blocks.append(f"{stripped_content};")
-        
-        formatted_blocks.append("")  # 空行分隔
+            content = content[:-1] if content.endswith("。") else content
+            result.append(f"{content};")
+        result.append("")
+        return result
     
-    chat_history_text = "\n".join(formatted_blocks).strip()
-    
-    if not chat_history_text:
-        chat_history_text = "还没有聊天记录。"
-    
-    return chat_history_text
+    formatted_blocks = [line for msg in chat_history[-max_messages:] for line in format_message(msg)]
+    return "\n".join(formatted_blocks).strip() or "还没有聊天记录。"
 
 
 def format_new_messages(
@@ -407,42 +376,21 @@ def format_new_messages(
     if not unprocessed_messages:
         return "", 0
     
-    if processed_times is None:
-        processed_times = set()
-    
+    processed_times = processed_times or set()
     new_blocks = []
-    actual_new_count = 0
     
     for msg in unprocessed_messages:
         msg_time = msg.get("time", time.time())
+        content = msg.get("content", "").strip()
         
-        # 跳过已处理的消息
-        if msg_time and msg_time in processed_times:
+        if msg_time in processed_times or not content:
             continue
-        
-        content = msg.get("content", "")
-        if not content:
-            continue
-        
-        user_name = msg.get("user_name", "用户")
-        msg_type = msg.get("type", "")
         
         readable_time = translate_timestamp(msg_time)
+        msg_type = msg.get("type", "")
+        sender = f"{bot_name}(你)" if msg_type == "bot_message" else msg.get("user_name", "用户")
         
-        if msg_type == "bot_message":
-            header = f"{readable_time} {bot_name}(你) 说:"
-        else:
-            header = f"{readable_time} {user_name} 说:"
-        
-        new_blocks.append(header)
-        
-        stripped_content = content.strip()
-        if stripped_content:
-            if stripped_content.endswith("。"):
-                stripped_content = stripped_content[:-1]
-            new_blocks.append(f"{stripped_content};")
-        
-        new_blocks.append("")
-        actual_new_count += 1
+        content = content[:-1] if content.endswith("。") else content
+        new_blocks.extend([f"{readable_time} {sender} 说:", f"{content};", ""])
     
-    return "\n".join(new_blocks).strip(), actual_new_count
+    return "\n".join(new_blocks).strip(), len(new_blocks) // 3
