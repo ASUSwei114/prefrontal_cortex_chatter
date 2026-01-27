@@ -43,6 +43,8 @@ from .shared import (
     build_knowledge_string,
     format_chat_history,
     format_new_messages,
+    build_action_history_table,
+    build_chat_history_table,
 )
 
 logger = get_logger("pfc_planner")
@@ -453,13 +455,47 @@ class ActionPlanner:
 
     def _get_chat_history_text(self) -> str:
         """获取聊天历史文本（使用共享模块）"""
-        # 使用共享模块格式化历史消息
-        chat_history_text = format_chat_history(
-            self.session.observation_info.chat_history,
-            bot_name=self.bot_name,
-            user_name=self.user_name,
-            max_messages=30,
-        )
+        # 获取配置
+        prompt_cfg = getattr(self._config, "prompt", None)
+        stream_format = getattr(prompt_cfg, "activity_stream_format", "narrative") if prompt_cfg else "narrative"
+        max_entry_length = getattr(prompt_cfg, "max_entry_length", 500) if prompt_cfg else 500
+        
+        stream_format = (stream_format or "narrative").strip().lower()
+        
+        # 根据配置选择格式
+        if stream_format == "table":
+            # 使用表格格式
+            chat_history_text = build_chat_history_table(
+                self.session.observation_info.chat_history,
+                bot_name=self.bot_name,
+                user_name=self.user_name,
+                max_messages=30,
+                max_cell_length=max_entry_length,
+            )
+        elif stream_format == "both":
+            # 两种格式都给
+            table_history = build_chat_history_table(
+                self.session.observation_info.chat_history,
+                bot_name=self.bot_name,
+                user_name=self.user_name,
+                max_messages=30,
+                max_cell_length=max_entry_length,
+            )
+            narrative_history = format_chat_history(
+                self.session.observation_info.chat_history,
+                bot_name=self.bot_name,
+                user_name=self.user_name,
+                max_messages=30,
+            )
+            chat_history_text = "\n\n".join([table_history, narrative_history])
+        else:
+            # 默认使用线性叙事格式
+            chat_history_text = format_chat_history(
+                self.session.observation_info.chat_history,
+                bot_name=self.bot_name,
+                user_name=self.user_name,
+                max_messages=30,
+            )
 
         # 添加新消息（仅添加尚未在历史中的消息）
         new_messages_count = self.session.observation_info.new_messages_count
@@ -490,6 +526,11 @@ class ActionPlanner:
 
     def _build_action_history(self) -> Tuple[str, str]:
         """构建行动历史和上一次行动结果"""
+        # 获取配置
+        prompt_cfg = getattr(self._config, "prompt", None)
+        stream_format = getattr(prompt_cfg, "activity_stream_format", "narrative") if prompt_cfg else "narrative"
+        max_entry_length = getattr(prompt_cfg, "max_entry_length", 500) if prompt_cfg else 500
+        
         action_history_summary = "你最近执行的行动历史：\n"
         last_action_context = "关于你【上一次尝试】的行动：\n"
 
@@ -505,36 +546,70 @@ class ActionPlanner:
             action_history_summary += "- 还没有执行过行动。\n"
             last_action_context += "- 这是你规划的第一个行动。\n"
         else:
-            for i, action_data in enumerate(action_history_list):
-                action_type = "未知"
-                plan_reason = "未知"
-                status = "未知"
-                final_reason = ""
-                action_time = ""
-
-                if isinstance(action_data, dict):
-                    action_type = action_data.get("action", "未知")
-                    plan_reason = action_data.get("plan_reason", "未知规划原因")
-                    status = action_data.get("status", "未知")
-                    final_reason = action_data.get("final_reason", "")
-                    action_time = action_data.get("time", "")
-
-                reason_text = f", 失败/取消原因: {final_reason}" if final_reason else ""
-                summary_line = f"- 时间:{action_time}, 尝试行动:'{action_type}', 状态:{status}{reason_text}"
-                action_history_summary += summary_line + "\n"
-
-                if i == len(action_history_list) - 1:
-                    last_action_context += f"- 上次【规划】的行动是: '{action_type}'\n"
-                    last_action_context += f"- 当时规划的【原因】是: {plan_reason}\n"
-                    if status == "done":
-                        last_action_context += "- 该行动已【成功执行】。\n"
-                    elif status == "recall":
-                        last_action_context += "- 但该行动最终【未能执行/被取消】。\n"
-                        if final_reason:
-                            last_action_context += f'- 【重要】失败/取消的具体原因是: "{final_reason}"\n'
-                        else:
-                            last_action_context += "- 【重要】失败/取消原因未明确记录。\n"
+            # 根据配置选择格式
+            stream_format = (stream_format or "narrative").strip().lower()
+            
+            if stream_format == "table":
+                # 使用表格格式
+                action_history_summary = build_action_history_table(
+                    action_history_list,
+                    max_cell_length=max_entry_length
+                )
+            elif stream_format == "both":
+                # 两种格式都给
+                table_summary = build_action_history_table(
+                    action_history_list,
+                    max_cell_length=max_entry_length
+                )
+                narrative_summary = self._build_narrative_action_history(action_history_list)
+                action_history_summary = "\n\n".join([table_summary, narrative_summary])
+            else:
+                # 默认使用线性叙事格式
+                action_history_summary = self._build_narrative_action_history(action_history_list)
+            
+            # 构建上一次行动上下文（始终使用叙事格式）
+            last_action_data = action_history_list[-1]
+            if isinstance(last_action_data, dict):
+                action_type = last_action_data.get("action", "未知")
+                plan_reason = last_action_data.get("plan_reason", "未知规划原因")
+                status = last_action_data.get("status", "未知")
+                final_reason = last_action_data.get("final_reason", "")
+                
+                last_action_context += f"- 上次【规划】的行动是: '{action_type}'\n"
+                last_action_context += f"- 当时规划的【原因】是: {plan_reason}\n"
+                if status == "done":
+                    last_action_context += "- 该行动已【成功执行】。\n"
+                elif status == "recall":
+                    last_action_context += "- 但该行动最终【未能执行/被取消】。\n"
+                    if final_reason:
+                        last_action_context += f'- 【重要】失败/取消的具体原因是: "{final_reason}"\n'
                     else:
-                        last_action_context += f"- 该行动当前状态: {status}\n"
+                        last_action_context += "- 【重要】失败/取消原因未明确记录。\n"
+                else:
+                    last_action_context += f"- 该行动当前状态: {status}\n"
 
         return action_history_summary, last_action_context
+    
+    def _build_narrative_action_history(self, action_history_list: list) -> str:
+        """构建线性叙事格式的行动历史"""
+        summary = "你最近执行的行动历史：\n"
+        
+        for i, action_data in enumerate(action_history_list):
+            action_type = "未知"
+            plan_reason = "未知"
+            status = "未知"
+            final_reason = ""
+            action_time = ""
+
+            if isinstance(action_data, dict):
+                action_type = action_data.get("action", "未知")
+                plan_reason = action_data.get("plan_reason", "未知规划原因")
+                status = action_data.get("status", "未知")
+                final_reason = action_data.get("final_reason", "")
+                action_time = action_data.get("time", "")
+
+            reason_text = f", 失败/取消原因: {final_reason}" if final_reason else ""
+            summary_line = f"- 时间:{action_time}, 尝试行动:'{action_type}', 状态:{status}{reason_text}"
+            summary += summary_line + "\n"
+        
+        return summary

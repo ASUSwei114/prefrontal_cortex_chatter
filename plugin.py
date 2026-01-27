@@ -77,6 +77,14 @@ class SessionConfig:
 
 
 @dataclass
+class PromptConfig:
+    """提示词配置"""
+    activity_stream_format: str = "narrative"
+    max_activity_entries: int = 30
+    max_entry_length: int = 500
+
+
+@dataclass
 class PFCConfig:
     """PFC 总配置"""
     enabled: bool = True
@@ -84,6 +92,7 @@ class PFCConfig:
     session: SessionConfig = field(default_factory=SessionConfig)
     reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
+    prompt: PromptConfig = field(default_factory=PromptConfig)
     
     @property
     def enabled_stream_types(self) -> list[str]:
@@ -119,6 +128,51 @@ def get_config() -> PFCConfig:
     return holder["config"]
 
 
+def _load_config_internal(
+    enabled: bool,
+    waiting: dict,
+    session: dict,
+    reply_checker: dict,
+    web_search: dict,
+    prompt: dict
+) -> PFCConfig:
+    """内部配置加载函数（统一加载逻辑）"""
+    try:
+        return PFCConfig(
+            enabled=enabled,
+            waiting=WaitingConfig(
+                wait_timeout_seconds=waiting.get("wait_timeout_seconds", 300),
+                block_ignore_seconds=waiting.get("block_ignore_seconds", 1800),
+                enable_block_action=waiting.get("enable_block_action", True),
+            ),
+            session=SessionConfig(
+                session_expire_seconds=session.get("session_expire_seconds", 86400 * 7),
+                max_history_entries=session.get("max_history_entries", 100),
+                initial_history_limit=session.get("initial_history_limit", 30),
+            ),
+            reply_checker=ReplyCheckerConfig(
+                enabled=reply_checker.get("enabled", True),
+                use_llm_check=reply_checker.get("use_llm_check", True),
+                similarity_threshold=reply_checker.get("similarity_threshold", 0.9),
+                max_retries=reply_checker.get("max_retries", 3),
+            ),
+            web_search=WebSearchConfig(
+                enabled=web_search.get("enabled", True),
+                num_results=web_search.get("num_results", 3),
+                time_range=web_search.get("time_range", "any"),
+                answer_mode=web_search.get("answer_mode", False),
+            ),
+            prompt=PromptConfig(
+                activity_stream_format=prompt.get("activity_stream_format", "narrative"),
+                max_activity_entries=prompt.get("max_activity_entries", 30),
+                max_entry_length=prompt.get("max_entry_length", 500),
+            )
+        )
+    except Exception as e:
+        logger.warning(f"配置加载失败，使用默认值: {e}")
+        return PFCConfig()
+
+
 def _load_config() -> PFCConfig:
     """加载 PFC 配置"""
     holder = _get_config_holder()
@@ -131,108 +185,40 @@ def _load_config() -> PFCConfig:
 
 def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
     """从插件配置字典加载配置"""
-    config = PFCConfig()
-    
-    try:
-        if "plugin" in cfg:
-            config.enabled = cfg["plugin"].get("enabled", True)
-
-        if "waiting" in cfg:
-            w = cfg["waiting"]
-            config.waiting = WaitingConfig(
-                wait_timeout_seconds=w.get("wait_timeout_seconds", 300),
-                block_ignore_seconds=w.get("block_ignore_seconds", 1800),
-                enable_block_action=w.get("enable_block_action", True),
-            )
-
-        if "session" in cfg:
-            s = cfg["session"]
-            config.session = SessionConfig(
-                session_expire_seconds=s.get("session_expire_seconds", 86400 * 7),
-                max_history_entries=s.get("max_history_entries", 100),
-                initial_history_limit=s.get("initial_history_limit", 30),
-            )
-
-        if "reply_checker" in cfg:
-            r = cfg["reply_checker"]
-            config.reply_checker = ReplyCheckerConfig(
-                enabled=r.get("enabled", True),
-                use_llm_check=r.get("use_llm_check", True),
-                similarity_threshold=r.get("similarity_threshold", 0.9),
-                max_retries=r.get("max_retries", 3),
-            )
-
-        if "web_search" in cfg:
-            ws = cfg["web_search"]
-            config.web_search = WebSearchConfig(
-                enabled=ws.get("enabled", True),
-                num_results=ws.get("num_results", 3),
-                time_range=ws.get("time_range", "any"),
-                answer_mode=ws.get("answer_mode", False),
-            )
-
-    except Exception as e:
-        logger.warning(f"从插件配置加载失败，使用默认值: {e}")
-
-    return config
+    return _load_config_internal(
+        enabled=cfg.get("plugin", {}).get("enabled", True),
+        waiting=cfg.get("waiting", {}),
+        session=cfg.get("session", {}),
+        reply_checker=cfg.get("reply_checker", {}),
+        web_search=cfg.get("web_search", {}),
+        prompt=cfg.get("prompt", {})
+    )
 
 
 def _load_from_global_config() -> PFCConfig:
     """从全局配置加载 PFC 配置（兼容旧版）"""
     from src.config.config import global_config
 
-    config = PFCConfig()
+    if not global_config or not hasattr(global_config, "prefrontal_cortex_chatter"):
+        return PFCConfig()
 
-    if not global_config:
-        return config
-
-    try:
-        if hasattr(global_config, "prefrontal_cortex_chatter"):
-            pfc_cfg = getattr(global_config, "prefrontal_cortex_chatter")
-
-            if hasattr(pfc_cfg, "plugin"):
-                plugin_cfg = pfc_cfg.plugin
-                if hasattr(plugin_cfg, "enabled"):
-                    config.enabled = plugin_cfg.enabled
-
-            if hasattr(pfc_cfg, "waiting"):
-                w = pfc_cfg.waiting
-                config.waiting = WaitingConfig(
-                    wait_timeout_seconds=getattr(w, "wait_timeout_seconds", 300),
-                    block_ignore_seconds=getattr(w, "block_ignore_seconds", 1800),
-                    enable_block_action=getattr(w, "enable_block_action", True),
-                )
-
-            if hasattr(pfc_cfg, "session"):
-                s = pfc_cfg.session
-                config.session = SessionConfig(
-                    session_expire_seconds=getattr(s, "session_expire_seconds", 86400 * 7),
-                    max_history_entries=getattr(s, "max_history_entries", 100),
-                    initial_history_limit=getattr(s, "initial_history_limit", 30),
-                )
-
-            if hasattr(pfc_cfg, "reply_checker"):
-                r = pfc_cfg.reply_checker
-                config.reply_checker = ReplyCheckerConfig(
-                    enabled=getattr(r, "enabled", True),
-                    use_llm_check=getattr(r, "use_llm_check", True),
-                    similarity_threshold=getattr(r, "similarity_threshold", 0.9),
-                    max_retries=getattr(r, "max_retries", 3),
-                )
-
-            if hasattr(pfc_cfg, "web_search"):
-                ws = pfc_cfg.web_search
-                config.web_search = WebSearchConfig(
-                    enabled=getattr(ws, "enabled", True),
-                    num_results=getattr(ws, "num_results", 3),
-                    time_range=getattr(ws, "time_range", "any"),
-                    answer_mode=getattr(ws, "answer_mode", False),
-                )
-
-    except Exception as e:
-        logger.warning(f"从全局配置加载失败，使用默认值: {e}")
-
-    return config
+    pfc_cfg = getattr(global_config, "prefrontal_cortex_chatter")
+    
+    # 提取配置对象或使用空字典
+    def get_config_dict(cfg, attr):
+        obj = getattr(cfg, attr, None) if hasattr(cfg, attr) else None
+        if obj is None:
+            return {}
+        return {k: getattr(obj, k, None) for k in dir(obj) if not k.startswith('_')}
+    
+    return _load_config_internal(
+        enabled=getattr(getattr(pfc_cfg, "plugin", None), "enabled", True) if hasattr(pfc_cfg, "plugin") else True,
+        waiting=get_config_dict(pfc_cfg, "waiting"),
+        session=get_config_dict(pfc_cfg, "session"),
+        reply_checker=get_config_dict(pfc_cfg, "reply_checker"),
+        web_search=get_config_dict(pfc_cfg, "web_search"),
+        prompt=get_config_dict(pfc_cfg, "prompt")
+    )
 
 
 def reload_config() -> PFCConfig:
@@ -265,23 +251,15 @@ CONFIG_VERSION = "1.4.0"
 
 @register_plugin
 class PrefrontalCortexChatterPlugin(BasePlugin):
-    """
-    Prefrontal Cortex Chatter 插件
-
-    从 MaiM-with-u 0.6.3-fix4 移植的私聊系统：
-    - 目标驱动的对话管理
-    - 多种行动类型（回复、等待、倾听、获取知识等）
-    - 回复质量检查
-    """
+    """Prefrontal Cortex Chatter 插件 - 目标驱动的私聊系统"""
 
     plugin_name: str = "prefrontal_cortex_chatter"
     enable_plugin: bool = True
-    plugin_priority: int = 55  # 高于 KFC
+    plugin_priority: int = 55
     dependencies: ClassVar[list[str]] = []
     python_dependencies: ClassVar[list[str]] = []
     config_file_name: str = "config.toml"
 
-    # 配置节描述
     config_section_descriptions: ClassVar[dict[str, str]] = {
         "inner": "配置元信息",
         "plugin": "插件基础配置",
@@ -289,134 +267,67 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
         "session": "会话管理配置",
         "reply_checker": "回复检查器配置",
         "web_search": "联网搜索配置",
+        "prompt": "提示词配置",
     }
 
-    # 配置 Schema - 用于自动生成和同步配置文件
     config_schema: ClassVar[dict[str, dict[str, ConfigField]]] = {
         "inner": {
-            "version": ConfigField(
-                type=str,
-                default=CONFIG_VERSION,
-                description="配置文件版本号（用于配置文件升级与兼容性检查）",
-            ),
+            "version": ConfigField(type=str, default=CONFIG_VERSION, description="配置文件版本号"),
         },
         "plugin": {
-            "enabled": ConfigField(
-                type=bool,
-                default=True,
-                description="是否启用 PFC 私聊聊天器",
-            ),
-            # enabled_stream_types 已硬编码为 ["private"]，不再作为配置项
+            "enabled": ConfigField(type=bool, default=True, description="是否启用 PFC 私聊聊天器"),
         },
         "waiting": {
-            "wait_timeout_seconds": ConfigField(
-                type=int,
-                default=300,
-                description="等待超时时间（秒），超时后AI会重新思考下一步行动",
-            ),
-            "block_ignore_seconds": ConfigField(
-                type=int,
-                default=1800,
-                description="屏蔽忽略时间（秒，默认30分钟）- 执行 block_and_ignore 动作后忽略对方消息的时长",
-            ),
-            "enable_block_action": ConfigField(
-                type=bool,
-                default=True,
-                description="是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能",
-            ),
+            "wait_timeout_seconds": ConfigField(type=int, default=300, description="等待超时时间（秒）"),
+            "block_ignore_seconds": ConfigField(type=int, default=1800, description="屏蔽忽略时间（秒）"),
+            "enable_block_action": ConfigField(type=bool, default=True, description="是否启用屏蔽动作"),
         },
         "session": {
-            "session_expire_seconds": ConfigField(
-                type=int,
-                default=604800,
-                description="会话过期时间（秒，默认7天）",
-            ),
-            "max_history_entries": ConfigField(
-                type=int,
-                default=100,
-                description="最大历史记录条数",
-            ),
-            "initial_history_limit": ConfigField(
-                type=int,
-                default=30,
-                description="从数据库加载的初始历史消息条数（启动时加载）",
-            ),
+            "session_expire_seconds": ConfigField(type=int, default=604800, description="会话过期时间（秒）"),
+            "max_history_entries": ConfigField(type=int, default=100, description="最大历史记录条数"),
+            "initial_history_limit": ConfigField(type=int, default=30, description="初始历史消息条数"),
         },
         "reply_checker": {
-            "enabled": ConfigField(
-                type=bool,
-                default=True,
-                description="是否启用回复检查器",
-            ),
-            "use_llm_check": ConfigField(
-                type=bool,
-                default=True,
-                description="是否使用 LLM 进行深度检查（否则只做基本检查）",
-            ),
-            "similarity_threshold": ConfigField(
-                type=float,
-                default=0.9,
-                description="相似度阈值（0-1），超过此值认为回复重复",
-            ),
-            "max_retries": ConfigField(
-                type=int,
-                default=3,
-                description="回复检查失败时的最大重试次数",
-            ),
+            "enabled": ConfigField(type=bool, default=True, description="是否启用回复检查器"),
+            "use_llm_check": ConfigField(type=bool, default=True, description="是否使用 LLM 深度检查"),
+            "similarity_threshold": ConfigField(type=float, default=0.9, description="相似度阈值（0-1）"),
+            "max_retries": ConfigField(type=int, default=3, description="最大重试次数"),
         },
         "web_search": {
-            "enabled": ConfigField(
-                type=bool,
-                default=True,
-                description="是否启用联网搜索功能（需要 WEB_SEARCH_TOOL 插件）",
-            ),
-            "num_results": ConfigField(
-                type=int,
-                default=3,
-                description="每次搜索返回的结果数量",
-            ),
-            "time_range": ConfigField(
+            "enabled": ConfigField(type=bool, default=True, description="是否启用联网搜索"),
+            "num_results": ConfigField(type=int, default=3, description="搜索结果数量"),
+            "time_range": ConfigField(type=str, default="any", description="搜索时间范围"),
+            "answer_mode": ConfigField(type=bool, default=False, description="是否启用答案模式"),
+        },
+        "prompt": {
+            "activity_stream_format": ConfigField(
                 type=str,
-                default="any",
-                description="搜索时间范围：any（任意时间）、week（一周内）、month（一月内）",
+                default="narrative",
+                description="活动流格式：narrative（线性叙事）/ table（结构化表格）/ both（两者都给）"
             ),
-            "answer_mode": ConfigField(
-                type=bool,
-                default=False,
-                description="是否启用答案模式（仅 Exa 搜索引擎支持，返回更精简的答案）",
-            ),
+            "max_activity_entries": ConfigField(type=int, default=30, description="活动记录保留条数"),
+            "max_entry_length": ConfigField(type=int, default=500, description="每条记录最大字符数"),
         },
     }
 
     async def on_plugin_loaded(self):
         """插件加载时"""
-        # 将插件配置传递给 config 模块
         set_plugin_config(self.config)
-        
         config = get_config()
 
         if not config.enabled:
             logger.info("[PFC] 插件已禁用")
             return
 
-        # 确保数据库表已创建
         await self._ensure_database_tables()
-
-        logger.info(
-            f"[PFC] 插件已加载 "
-            f"(配置版本: {self.config.get('inner', {}).get('version', 'unknown')})"
-        )
+        logger.info(f"[PFC] 插件已加载 (v{self.config.get('inner', {}).get('version', 'unknown')})")
 
     async def _ensure_database_tables(self):
         """确保 PFC 数据库表已创建"""
         try:
-            # 导入 PFC 数据库模型（这会将它们注册到 Base.metadata）
             from .db_models import PFCChatHistory, PFCSession  # noqa: F401
-            
-            # 使用 MoFox 的数据库迁移功能创建表
             from src.common.database.core.migration import check_and_migrate_database
             await check_and_migrate_database()
-            
             logger.info("[PFC] 数据库表初始化完成")
         except Exception as e:
             logger.error(f"[PFC] 数据库表初始化失败: {e}")
@@ -428,34 +339,17 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
 
     def get_plugin_components(self):
         """返回组件列表"""
-        config = get_config()
-
-        if not config.enabled:
+        if not get_config().enabled:
             return []
 
         components = []
-
-        try:
-            # 注册 Chatter（延迟导入）
-            ChatterClass = _get_chatter_class()
-            components.append((
-                ChatterClass.get_chatter_info(),
-                ChatterClass,
-            ))
-            logger.debug("[PFC] 成功加载 PrefrontalCortexChatter 组件")
-        except Exception as e:
-            logger.error(f"[PFC] 加载 Chatter 组件失败: {e}")
-
-        try:
-            # 注册 PFC 专属 Reply 动作（延迟导入）
-            ReplyActionClass = _get_reply_action_class()
-            components.append((
-                ReplyActionClass.get_action_info(),
-                ReplyActionClass,
-            ))
-            logger.debug("[PFC] 成功加载 PFCReplyAction 组件")
-        except Exception as e:
-            logger.error(f"[PFC] 加载 Reply 动作失败: {e}")
+        for name, loader in [("Chatter", _get_chatter_class), ("ReplyAction", _get_reply_action_class)]:
+            try:
+                cls = loader()
+                components.append((cls.get_chatter_info() if name == "Chatter" else cls.get_action_info(), cls))
+                logger.debug(f"[PFC] 成功加载 {name} 组件")
+            except Exception as e:
+                logger.error(f"[PFC] 加载 {name} 组件失败: {e}")
 
         return components
 
@@ -466,11 +360,6 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             "display_name": "Prefrontal Cortex Chatter",
             "version": "1.0.0",
             "author": "MaiM-with-u",
-            "description": "从 MaiM-with-u 0.6.3-fix4 移植的私聊系统",
-            "features": [
-                "目标驱动的对话管理",
-                "多种行动类型",
-                "回复质量检查",
-                "主动思考能力",
-            ],
+            "description": "目标驱动的私聊系统",
+            "features": ["目标驱动对话", "多种行动类型", "回复质量检查", "主动思考"],
         }

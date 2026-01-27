@@ -94,103 +94,68 @@ class PrefrontalCortexChatter(BaseChatter):
         logger.info(f"[PFC] 初始化完成: stream_id={stream_id}")
 
     async def execute(self, context: StreamContext) -> dict:
-        """
-        执行聊天处理 - 复刻原版PFC的持续循环行为
-
-        流程：
-        1. 获取 Session
-        2. 获取未读消息
-        3. 记录用户消息
-        4. 启动或唤醒会话循环（持续运行的后台任务）
-        """
+        """执行聊天处理 - 复刻原版PFC的持续循环行为"""
         async with self._lock:
             self._processing = True
-
             try:
-                # 1. 获取未读消息
+                # 验证并获取消息信息
                 unread_messages = context.get_unread_messages()
                 if not unread_messages:
                     return self._build_result(success=True, message="no_unread_messages")
 
-                # 2. 取最后一条消息作为主消息
-                target_message = unread_messages[-1]
-                user_info = target_message.user_info
-
+                user_info = unread_messages[-1].user_info
                 if not user_info:
                     return self._build_result(success=False, message="no_user_info")
 
                 user_id = str(user_info.user_id)
                 user_name = user_info.user_nickname or user_id
 
-                # 3. 获取或创建 Session
+                # 获取或创建 Session
                 session = await self.session_manager.get_session(user_id, self.stream_id)
-
-                # 立即更新活动时间
                 session.update_activity()
 
-                # 3.5 如果本次运行还没有从数据库加载过历史，则加载（确保包含重启前的消息）
+                # 加载初始历史（仅首次）
                 if not session._history_loaded_from_db:
                     await self._load_initial_history(session, user_name)
                     session._history_loaded_from_db = True
 
-                # 4. 检查是否在忽略期
+                # 检查忽略状态
                 if session.ignore_until_timestamp and time.time() < session.ignore_until_timestamp:
-                    logger.info(f"[PFC] 用户 {user_id} 在忽略期内，跳过处理")
+                    logger.info(f"[PFC] 用户 {user_id} 在忽略期内")
                     return self._build_result(success=True, message="ignored")
 
-                # 5. 结束等待状态（如果有新消息）
+                # 结束等待状态
                 if session.state == ConversationState.WAITING:
                     session.end_waiting()
                     await self.session_manager.save_session(user_id)
 
-                # 6. 记录用户消息
+                # 记录用户消息
                 for msg in unread_messages:
-                    msg_content = msg.processed_plain_text or msg.display_message or ""
-                    msg_user_name = msg.user_info.user_nickname if msg.user_info else user_name
-                    msg_user_id = str(msg.user_info.user_id) if msg.user_info else user_id
-
                     session.add_user_message(
-                        content=msg_content,
-                        user_name=msg_user_name,
-                        user_id=msg_user_id,
+                        content=msg.processed_plain_text or msg.display_message or "",
+                        user_name=msg.user_info.user_nickname if msg.user_info else user_name,
+                        user_id=str(msg.user_info.user_id) if msg.user_info else user_id,
                         timestamp=msg.time,
                     )
 
-                # 7. 构建聊天历史字符串
+                # 构建聊天历史并启动循环
                 await self._build_chat_history_str(session, user_name)
-
-                # 8. 启动或获取会话循环（复刻原版PFC的持续循环）
+                
                 from .conversation_loop import get_loop_manager
-                
-                loop_manager = get_loop_manager()
-                
-                # 确保会话应该继续
                 session.should_continue = True
-                
-                # 获取或创建循环
-                await loop_manager.get_or_create_loop(session, user_name)
+                await get_loop_manager().get_or_create_loop(session, user_name)
 
-                # 9. 标记消息为已读
+                # 标记已读并保存
                 for msg in unread_messages:
                     context.mark_message_as_read(str(msg.message_id))
-
-                # 10. 保存 Session
                 await self.session_manager.save_session(user_id)
 
-                # 11. 更新统计
                 self._stats["messages_processed"] += len(unread_messages)
-
-                logger.debug(
-                    f"[PFC] 消息已记录，会话循环运行中: user={user_name}, "
-                    f"new_messages={len(unread_messages)}"
-                )
+                logger.debug(f"[PFC] 消息已记录，循环运行中: {user_name}, 新消息数={len(unread_messages)}")
 
                 return self._build_result(
-                    success=True,
-                    message="loop_running",
-                    user_id=user_id,
-                    user_name=user_name,
-                    new_messages=len(unread_messages),
+                    success=True, message="loop_running", user_id=user_id,
+                    user_name=user_name, new_messages=len(unread_messages)
                 )
 
             except Exception as e:
@@ -199,7 +164,6 @@ class PrefrontalCortexChatter(BaseChatter):
                 import traceback
                 traceback.print_exc()
                 return self._build_result(success=False, message=str(e), error=True)
-
             finally:
                 self._processing = False
 
@@ -290,67 +254,43 @@ class PrefrontalCortexChatter(BaseChatter):
             traceback.print_exc()
 
     async def _build_chat_history_str(self, session: PFCSession, user_name: str) -> None:
-        """
-        构建聊天历史字符串
-        
-        使用相对时间格式（如"刚刚"、"5分钟前"），与原版 MaiM-with-u 保持一致，
-        让 LLM 能够理解消息的时间上下文。
-        """
+        """构建聊天历史字符串（相对时间格式）"""
         from .shared import translate_timestamp
         from src.config.config import global_config
         
-        formatted_blocks = []
         bot_name = global_config.bot.nickname if global_config else "Bot"
+        formatted_blocks = []
 
-        # 历史消息
         for msg in session.observation_info.chat_history[-30:]:
             msg_type = msg.get("type", "")
-            content = msg.get("content", "")
-            msg_time = msg.get("time", time.time())
-
-            # 使用相对时间格式
-            readable_time = translate_timestamp(msg_time, mode="relative")
-
-            if msg_type == "user_message":
-                sender = msg.get("user_name", user_name)
-                header = f"{readable_time} {sender} 说:"
-            elif msg_type == "bot_message":
-                header = f"{readable_time} {bot_name}(你) 说:"
-            else:
+            if msg_type not in ["user_message", "bot_message"]:
                 continue
+
+            content = msg.get("content", "").strip()
+            if not content:
+                continue
+
+            readable_time = translate_timestamp(msg.get("time", time.time()), mode="relative")
+            sender = msg.get("user_name", user_name) if msg_type == "user_message" else f"{bot_name}(你)"
             
-            formatted_blocks.append(header)
+            # 移除末尾句号并添加分号
+            if content.endswith("。"):
+                content = content[:-1]
             
-            # 添加内容
-            if content:
-                stripped_content = content.strip()
-                if stripped_content:
-                    # 移除末尾句号，添加分号（模仿原版行为）
-                    if stripped_content.endswith("。"):
-                        stripped_content = stripped_content[:-1]
-                    formatted_blocks.append(f"{stripped_content};")
-            
-            formatted_blocks.append("")  # 空行分隔
+            formatted_blocks.extend([f"{readable_time} {sender} 说:", f"{content};", ""])
 
         session.observation_info.chat_history_str = "\n".join(formatted_blocks).strip()
 
-    def _build_result(
-        self,
-        success: bool,
-        message: str = "",
-        error: bool = False,
-        **kwargs,
-    ) -> dict:
+    def _build_result(self, success: bool, message: str = "", error: bool = False, **kwargs) -> dict:
         """构建返回结果"""
-        result = {
+        return {
             "success": success,
             "stream_id": self.stream_id,
             "message": message,
             "error": error,
             "timestamp": time.time(),
+            **kwargs
         }
-        result.update(kwargs)
-        return result
 
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
