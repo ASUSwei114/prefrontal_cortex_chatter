@@ -82,6 +82,7 @@ class PromptConfig:
     activity_stream_format: str = "narrative"
     max_activity_entries: int = 30
     max_entry_length: int = 500
+    inject_system_prompt: bool = False  # 是否注入 MoFox 系统提示词
 
 
 @dataclass
@@ -166,6 +167,7 @@ def _load_config_internal(
                 activity_stream_format=prompt.get("activity_stream_format", "narrative"),
                 max_activity_entries=prompt.get("max_activity_entries", 30),
                 max_entry_length=prompt.get("max_entry_length", 500),
+                inject_system_prompt=prompt.get("inject_system_prompt", False),
             )
         )
     except Exception as e:
@@ -246,7 +248,7 @@ def _get_reply_action_class():
 
 
 # 配置文件版本号 - 更新配置结构时递增此版本
-CONFIG_VERSION = "1.4.0"
+CONFIG_VERSION = "1.5.0"
 
 
 @register_plugin
@@ -307,6 +309,11 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             ),
             "max_activity_entries": ConfigField(type=int, default=30, description="活动记录保留条数"),
             "max_entry_length": ConfigField(type=int, default=500, description="每条记录最大字符数"),
+            "inject_system_prompt": ConfigField(
+                type=bool,
+                default=False,
+                description="是否注入 MoFox 系统提示词（启用后会使用 replyer_private 模型配置）"
+            ),
         },
     }
 

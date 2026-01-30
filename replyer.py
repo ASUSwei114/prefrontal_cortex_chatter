@@ -214,17 +214,26 @@ class ReplyGenerator:
         # 调用 LLM 生成
         try:
             models = llm_api.get_available_models()
-            # 使用 utils 而非 replyer，避免自动注入 MoFox 系统提示词
-            # replyer 配置会在 LLMRequest 中自动注入 SYSTEM_PROMPT
-            replyer_config = models.get("utils")
             
-            if not replyer_config:
-                logger.warning("[PFC] 未找到 replyer 模型配置")
+            # 根据配置决定是否注入系统提示词
+            # replyer_private 配置会在 LLMRequest 中自动注入 SYSTEM_PROMPT
+            # utils 配置不会注入系统提示词
+            if self.config.prompt.inject_system_prompt:
+                model_name = "replyer_private"
+                logger.info(f"[PFC] 已启用系统提示词注入，使用 {model_name} 模型")
+            else:
+                model_name = "utils"
+                logger.debug(f"[PFC] 未启用系统提示词注入，使用 {model_name} 模型")
+            
+            model_config = models.get(model_name)
+            
+            if not model_config:
+                logger.warning(f"[PFC] 未找到 {model_name} 模型配置")
                 return ""
             
             success, response, _, _ = await llm_api.generate_with_model(
                 prompt=prompt,
-                model_config=replyer_config,
+                model_config=model_config,
                 request_type="pfc.reply_generation",
             )
             
