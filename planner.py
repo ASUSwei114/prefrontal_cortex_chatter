@@ -52,15 +52,14 @@ logger = get_logger("pfc_planner")
 
 # --- 定义 Prompt 模板 ---
 
-# Prompt(1): 首次回复或非连续回复时的决策 Prompt（带 block_and_ignore）
-PROMPT_INITIAL_REPLY_WITH_BLOCK = """{persona_text}。现在你在参与一场QQ私聊，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以回复，可以倾听，可以调取知识，甚至可以屏蔽对方：
-
-【当前时间】
+# 通用模板部分
+_PROMPT_CONTEXT = """【当前时间】
 {current_time_str}
 
 【当前对话目标】
 {goals_str}
 {knowledge_info_str}
+{tool_info_str}
 
 【最近行动历史概要】
 {action_history_summary}
@@ -71,130 +70,56 @@ PROMPT_INITIAL_REPLY_WITH_BLOCK = """{persona_text}。现在你在参与一场QQ
 【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
 {chat_history_text}
 
-------
-可选行动类型以及解释：
-fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
+------"""
+
+_PROMPT_JSON_OUTPUT = """请以JSON格式输出你的决策：
+{{
+    "action": "选择的行动类型 (必须是上面列表中的一个)",
+    "reason": "选择该行动的详细原因 ({reason_hint})"
+}}
+
+注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
+
+# 行动类型定义
+_ACTIONS_BASE = """fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
 listening: 倾听对方发言，当你认为对方话才说到一半，发言明显未结束时选择
-direct_reply: 直接回复对方
 rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择。注意私聊的环境是灵活的，有可能需要经常选择
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择
+end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择"""
 
-请以JSON格式输出你的决策：
-{{
-    "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因 (必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的)"
-}}
+_ACTION_BLOCK = """block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择"""
 
-注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
+_ACTION_DIRECT_REPLY = """direct_reply: 直接回复对方"""
 
-# Prompt(1): 首次回复或非连续回复时的决策 Prompt（不带 block_and_ignore）
-PROMPT_INITIAL_REPLY_NO_BLOCK = """{persona_text}。现在你在参与一场QQ私聊，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以回复，可以倾听，可以调取知识：
+_ACTION_FOLLOW_UP = """wait: 暂时不说话，留给对方交互空间，等待对方回复（尤其是在你刚发言后、或上次发言因重复、发言过多被拒时、或不确定做什么时，这是不错的选择）
+send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。**但是避免在因重复被拒后立即使用，也不要在对方没有回复的情况下过多的"消息轰炸"或重复发言**"""
 
-【当前时间】
-{current_time_str}
+_REASON_HINT_INITIAL = '必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的'
+_REASON_HINT_FOLLOW_UP = '必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的。请说明你为什么选择继续发言而不是等待，以及打算发送什么类型的新消息连续发言，必须记录已经发言了几次'
 
-【当前对话目标】
-{goals_str}
-{knowledge_info_str}
 
-【最近行动历史概要】
-{action_history_summary}
-【上一次行动的详细情况和结果】
-{last_action_context}
-【时间和超时提示】
-{time_info}{time_since_last_bot_message_info}{timeout_context}
-【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
-{chat_history_text}
+def _build_planner_prompt(is_follow_up: bool, enable_block: bool) -> str:
+    """构建规划器 Prompt"""
+    if is_follow_up:
+        intro = "{{persona_text}}。现在你在参与一场QQ私聊，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识"
+        actions = f"{_ACTION_FOLLOW_UP}\n{_ACTIONS_BASE}"
+        reason_hint = _REASON_HINT_FOLLOW_UP
+    else:
+        intro = "{{persona_text}}。现在你在参与一场QQ私聊，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以回复，可以倾听，可以调取知识"
+        actions = f"{_ACTION_DIRECT_REPLY}\n{_ACTIONS_BASE}"
+        reason_hint = _REASON_HINT_INITIAL
+    
+    if enable_block:
+        intro += "，甚至可以屏蔽对方"
+        actions += f"\n{_ACTION_BLOCK}"
+    
+    return f"{intro}：\n\n{_PROMPT_CONTEXT}\n可选行动类型以及解释：\n{actions}\n\n{_PROMPT_JSON_OUTPUT.format(reason_hint=reason_hint)}"
 
-------
-可选行动类型以及解释：
-fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
-listening: 倾听对方发言，当你认为对方话才说到一半，发言明显未结束时选择
-direct_reply: 直接回复对方
-rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择。注意私聊的环境是灵活的，有可能需要经常选择
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
 
-请以JSON格式输出你的决策：
-{{
-    "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因 (必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的)"
-}}
-
-注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
-
-# Prompt(2): 上一次成功回复后，决定继续发言时的决策 Prompt（带 block_and_ignore）
-PROMPT_FOLLOW_UP_WITH_BLOCK = """{persona_text}。现在你在参与一场QQ私聊，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识，甚至可以屏蔽对方：
-
-【当前时间】
-{current_time_str}
-
-【当前对话目标】
-{goals_str}
-{knowledge_info_str}
-
-【最近行动历史概要】
-{action_history_summary}
-【上一次行动的详细情况和结果】
-{last_action_context}
-【时间和超时提示】
-{time_info}{time_since_last_bot_message_info}{timeout_context}
-【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
-{chat_history_text}
-
-------
-可选行动类型以及解释：
-fetch_knowledge: 需要调取知识，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
-wait: 暂时不说话，留给对方交互空间，等待对方回复（尤其是在你刚发言后、或上次发言因重复、发言过多被拒时、或不确定做什么时，这是不错的选择）
-listening: 倾听对方发言（虽然你刚发过言，但如果对方立刻回复且明显话没说完，可以选择这个）
-send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。**但是避免在因重复被拒后立即使用，也不要在对方没有回复的情况下过多的"消息轰炸"或重复发言**
-rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择。注意私聊的环境是灵活的，有可能需要经常选择
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择
-
-请以JSON格式输出你的决策：
-{{
-    "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因 (必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的。请说明你为什么选择继续发言而不是等待，以及打算发送什么类型的新消息连续发言，必须记录已经发言了几次)"
-}}
-
-注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
-
-# Prompt(2): 上一次成功回复后，决定继续发言时的决策 Prompt（不带 block_and_ignore）
-PROMPT_FOLLOW_UP_NO_BLOCK = """{persona_text}。现在你在参与一场QQ私聊，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识：
-
-【当前时间】
-{current_time_str}
-
-【当前对话目标】
-{goals_str}
-{knowledge_info_str}
-
-【最近行动历史概要】
-{action_history_summary}
-【上一次行动的详细情况和结果】
-{last_action_context}
-【时间和超时提示】
-{time_info}{time_since_last_bot_message_info}{timeout_context}
-【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息)
-{chat_history_text}
-
-------
-可选行动类型以及解释：
-fetch_knowledge: 需要调取知识，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
-wait: 暂时不说话，留给对方交互空间，等待对方回复（尤其是在你刚发言后、或上次发言因重复、发言过多被拒时、或不确定做什么时，这是不错的选择）
-listening: 倾听对方发言（虽然你刚发过言，但如果对方立刻回复且明显话没说完，可以选择这个）
-send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。**但是避免在因重复被拒后立即使用，也不要在对方没有回复的情况下过多的"消息轰炸"或重复发言**
-rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择。注意私聊的环境是灵活的，有可能需要经常选择
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-
-请以JSON格式输出你的决策：
-{{
-    "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因 (必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的。请说明你为什么选择继续发言而不是等待，以及打算发送什么类型的新消息连续发言，必须记录已经发言了几次)"
-}}
-
-注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
+# 预构建的 Prompt 模板
+PROMPT_INITIAL_REPLY_WITH_BLOCK = _build_planner_prompt(is_follow_up=False, enable_block=True)
+PROMPT_INITIAL_REPLY_NO_BLOCK = _build_planner_prompt(is_follow_up=False, enable_block=False)
+PROMPT_FOLLOW_UP_WITH_BLOCK = _build_planner_prompt(is_follow_up=True, enable_block=True)
+PROMPT_FOLLOW_UP_NO_BLOCK = _build_planner_prompt(is_follow_up=True, enable_block=False)
 
 # Prompt(3): 决定是否在结束对话前发送告别语
 PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ 私聊。
@@ -252,6 +177,10 @@ class ActionPlanner:
         persona_text = f"{personality_info}"
         action_history_summary, last_action_context = self._build_action_history()
 
+        # ========== 新增：构建工具信息 ==========
+        tool_info_str = await self._build_tool_info()
+        # ========================================
+
         # 选择 Prompt（根据配置决定是否包含 block_and_ignore 动作）
         last_successful_reply_action = self.session.conversation_info.last_successful_reply_action
         # 使用 getattr 安全访问，兼容旧版配置文件
@@ -289,6 +218,7 @@ class ActionPlanner:
             timeout_context=timeout_context,
             chat_history_text=chat_history_text if chat_history_text.strip() else "还没有聊天记录。",
             knowledge_info_str=knowledge_info_str,
+            tool_info_str=tool_info_str if tool_info_str.strip() else "- 暂无工具信息",
             current_time_str=current_time_str,
         )
 
@@ -613,3 +543,52 @@ class ActionPlanner:
             summary += summary_line + "\n"
         
         return summary
+    
+    async def _build_tool_info(self) -> str:
+        """构建工具信息块
+        
+        使用 context_builder 中的 PFCContextBuilder 构建工具信息
+        如果配置禁用了工具调用，则返回空字符串
+        """
+        # 检查是否启用工具调用
+        if not self._config.tool.enabled:
+            return ""
+        
+        # 检查是否在规划器中启用
+        if not self._config.tool.enable_in_planner:
+            return ""
+        
+        try:
+            from .context_builder import PFCContextBuilder
+            
+            builder = PFCContextBuilder(self.session.stream_id, self._config)
+            
+            # 获取聊天历史文本
+            chat_history_text = format_chat_history(
+                self.session.observation_info.chat_history,
+                bot_name=self.bot_name,
+                user_name=self.user_name,
+                max_messages=10,
+            )
+            
+            # 获取最后一条消息作为目标消息
+            target_message = ""
+            if self.session.observation_info.chat_history:
+                last_msg = self.session.observation_info.chat_history[-1]
+                target_message = last_msg.get("content", "")
+            
+            # 构建上下文
+            context_data = await builder.build_tool_info(
+                chat_history=chat_history_text,
+                sender_name=self.user_name,
+                target_message=target_message,
+                enable_tool=True,
+            )
+            
+            return context_data
+            
+        except Exception as e:
+            logger.error(f"[PFC][{self.user_name}] 构建工具信息失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return ""

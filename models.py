@@ -35,10 +35,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-# 延迟导入共享模块以避免循环导入
-def _get_translate_timestamp():
-    from .shared import translate_timestamp
-    return translate_timestamp
 
 
 class ConversationState(Enum):
@@ -197,63 +193,28 @@ class ObservationInfo:
         )
 
     async def clear_unprocessed_messages(self, bot_name: str = "Bot") -> None:
-        """清理未处理消息，将其合并到历史并更新历史字符串
-        
-        PFC 使用自定义的消息格式，使用相对时间格式让 LLM 理解时间上下文。
-        """
+        """清理未处理消息，将其合并到历史并更新历史字符串"""
         if not self.unprocessed_messages:
             return
         
-        # 将未处理消息合并到历史列表
-        max_history_len = 100  # 最多保留100条历史记录
-        self.chat_history.extend(self.unprocessed_messages)
-        if len(self.chat_history) > max_history_len:
-            self.chat_history = self.chat_history[-max_history_len:]
-        
-        # 使用带时间的格式构建历史字符串
-        # 只使用最近一部分生成，例如20条
-        history_slice_for_str = self.chat_history[-20:]
-        
         from src.config.config import global_config
+        from .shared import translate_timestamp, format_chat_history
+        
+        # 合并到历史列表（最多保留100条）
+        self.chat_history.extend(self.unprocessed_messages)
+        if len(self.chat_history) > 100:
+            self.chat_history = self.chat_history[-100:]
+        
+        # 使用共享模块格式化历史字符串
         actual_bot_name = global_config.bot.nickname if global_config else bot_name
+        self.chat_history_str = format_chat_history(
+            self.chat_history[-20:], actual_bot_name, "用户", 20
+        )
         
-        new_blocks = []
-        for msg in history_slice_for_str:
-            msg_time = msg.get("time", time.time())
-            readable_time = self._translate_timestamp(msg_time)
-            content = msg.get("content", "")
-            
-            if not content:  # 跳过空内容
-                continue
-            
-            # 格式化内容
-            stripped_content = content.strip()
-            if stripped_content.endswith("。"):
-                stripped_content = stripped_content[:-1]
-            
-            if msg.get("type") == "user_message":
-                sender_name = msg.get("user_name", "用户")
-                header = f"{readable_time} {sender_name} 说:"
-            elif msg.get("type") == "bot_message":
-                header = f"{readable_time} {actual_bot_name}(你) 说:"
-            else:
-                continue
-            
-            new_blocks.append(header)
-            new_blocks.append(f"{stripped_content};")
-            new_blocks.append("")  # 空行分隔
-        
-        self.chat_history_str = "\n".join(new_blocks).strip()
-        
-        # 清空未处理消息列表和计数
+        # 清空未处理消息
         self.unprocessed_messages = []
         self.new_messages_count = 0
         self.chat_history_count = len(self.chat_history)
-    
-    def _translate_timestamp(self, timestamp: float) -> str:
-        """将时间戳转换为相对时间格式（使用共享模块）"""
-        translate_timestamp = _get_translate_timestamp()
-        return translate_timestamp(timestamp)
 
 
 @dataclass

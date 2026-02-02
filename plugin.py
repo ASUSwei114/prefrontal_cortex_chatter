@@ -51,6 +51,14 @@ class ReplyCheckerConfig:
 
 
 @dataclass
+class ToolConfig:
+    """工具调用配置"""
+    enabled: bool = True
+    enable_in_planner: bool = True
+    enable_in_replyer: bool = True
+
+
+@dataclass
 class WebSearchConfig:
     """联网搜索配置"""
     enabled: bool = True
@@ -93,6 +101,7 @@ class PFCConfig:
     session: SessionConfig = field(default_factory=SessionConfig)
     reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
+    tool: ToolConfig = field(default_factory=ToolConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     
     @property
@@ -129,46 +138,25 @@ def get_config() -> PFCConfig:
     return holder["config"]
 
 
-def _load_config_internal(
-    enabled: bool,
-    waiting: dict,
-    session: dict,
-    reply_checker: dict,
-    web_search: dict,
-    prompt: dict
-) -> PFCConfig:
-    """内部配置加载函数（统一加载逻辑）"""
+def _dict_to_dataclass(cls, data: dict):
+    """将字典转换为 dataclass 实例"""
+    import dataclasses
+    fields = {f.name: f.default for f in dataclasses.fields(cls)}
+    return cls(**{k: data.get(k, v) for k, v in fields.items()})
+
+
+def _load_config_internal(enabled: bool, waiting: dict, session: dict,
+                          reply_checker: dict, web_search: dict, tool: dict, prompt: dict) -> PFCConfig:
+    """内部配置加载函数"""
     try:
         return PFCConfig(
             enabled=enabled,
-            waiting=WaitingConfig(
-                wait_timeout_seconds=waiting.get("wait_timeout_seconds", 300),
-                block_ignore_seconds=waiting.get("block_ignore_seconds", 1800),
-                enable_block_action=waiting.get("enable_block_action", True),
-            ),
-            session=SessionConfig(
-                session_expire_seconds=session.get("session_expire_seconds", 86400 * 7),
-                max_history_entries=session.get("max_history_entries", 100),
-                initial_history_limit=session.get("initial_history_limit", 30),
-            ),
-            reply_checker=ReplyCheckerConfig(
-                enabled=reply_checker.get("enabled", True),
-                use_llm_check=reply_checker.get("use_llm_check", True),
-                similarity_threshold=reply_checker.get("similarity_threshold", 0.9),
-                max_retries=reply_checker.get("max_retries", 3),
-            ),
-            web_search=WebSearchConfig(
-                enabled=web_search.get("enabled", True),
-                num_results=web_search.get("num_results", 3),
-                time_range=web_search.get("time_range", "any"),
-                answer_mode=web_search.get("answer_mode", False),
-            ),
-            prompt=PromptConfig(
-                activity_stream_format=prompt.get("activity_stream_format", "narrative"),
-                max_activity_entries=prompt.get("max_activity_entries", 30),
-                max_entry_length=prompt.get("max_entry_length", 500),
-                inject_system_prompt=prompt.get("inject_system_prompt", False),
-            )
+            waiting=_dict_to_dataclass(WaitingConfig, waiting),
+            session=_dict_to_dataclass(SessionConfig, session),
+            reply_checker=_dict_to_dataclass(ReplyCheckerConfig, reply_checker),
+            web_search=_dict_to_dataclass(WebSearchConfig, web_search),
+            tool=_dict_to_dataclass(ToolConfig, tool),
+            prompt=_dict_to_dataclass(PromptConfig, prompt),
         )
     except Exception as e:
         logger.warning(f"配置加载失败，使用默认值: {e}")
@@ -185,42 +173,30 @@ def _load_config() -> PFCConfig:
         return _load_from_global_config()
 
 
+def _extract_config_sections(cfg: Any, is_dict: bool = True) -> tuple:
+    """提取配置各部分"""
+    if is_dict:
+        get = lambda k, d={}: cfg.get(k, d)
+        enabled = cfg.get("plugin", {}).get("enabled", True)
+    else:
+        get = lambda k, d={}: {a: getattr(getattr(cfg, k, None), a, None)
+                               for a in dir(getattr(cfg, k, None) or object()) if not a.startswith('_')}
+        enabled = getattr(getattr(cfg, "plugin", None), "enabled", True)
+    return enabled, get("waiting"), get("session"), get("reply_checker"), get("web_search"), get("tool"), get("prompt")
+
+
 def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
     """从插件配置字典加载配置"""
-    return _load_config_internal(
-        enabled=cfg.get("plugin", {}).get("enabled", True),
-        waiting=cfg.get("waiting", {}),
-        session=cfg.get("session", {}),
-        reply_checker=cfg.get("reply_checker", {}),
-        web_search=cfg.get("web_search", {}),
-        prompt=cfg.get("prompt", {})
-    )
+    return _load_config_internal(*_extract_config_sections(cfg, is_dict=True))
 
 
 def _load_from_global_config() -> PFCConfig:
     """从全局配置加载 PFC 配置（兼容旧版）"""
     from src.config.config import global_config
-
     if not global_config or not hasattr(global_config, "prefrontal_cortex_chatter"):
         return PFCConfig()
-
-    pfc_cfg = getattr(global_config, "prefrontal_cortex_chatter")
-    
-    # 提取配置对象或使用空字典
-    def get_config_dict(cfg, attr):
-        obj = getattr(cfg, attr, None) if hasattr(cfg, attr) else None
-        if obj is None:
-            return {}
-        return {k: getattr(obj, k, None) for k in dir(obj) if not k.startswith('_')}
-    
-    return _load_config_internal(
-        enabled=getattr(getattr(pfc_cfg, "plugin", None), "enabled", True) if hasattr(pfc_cfg, "plugin") else True,
-        waiting=get_config_dict(pfc_cfg, "waiting"),
-        session=get_config_dict(pfc_cfg, "session"),
-        reply_checker=get_config_dict(pfc_cfg, "reply_checker"),
-        web_search=get_config_dict(pfc_cfg, "web_search"),
-        prompt=get_config_dict(pfc_cfg, "prompt")
-    )
+    return _load_config_internal(*_extract_config_sections(
+        getattr(global_config, "prefrontal_cortex_chatter"), is_dict=False))
 
 
 def reload_config() -> PFCConfig:
@@ -269,6 +245,7 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
         "session": "会话管理配置",
         "reply_checker": "回复检查器配置",
         "web_search": "联网搜索配置",
+        "tool": "工具调用配置",
         "prompt": "提示词配置",
     }
 
@@ -300,6 +277,11 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             "num_results": ConfigField(type=int, default=3, description="搜索结果数量"),
             "time_range": ConfigField(type=str, default="any", description="搜索时间范围"),
             "answer_mode": ConfigField(type=bool, default=False, description="是否启用答案模式"),
+        },
+        "tool": {
+            "enabled": ConfigField(type=bool, default=True, description="是否启用工具调用（类似 KFC 的工具调用功能）"),
+            "enable_in_planner": ConfigField(type=bool, default=True, description="是否在规划器中显示工具信息"),
+            "enable_in_replyer": ConfigField(type=bool, default=True, description="是否在回复生成器中显示工具信息"),
         },
         "prompt": {
             "activity_stream_format": ConfigField(

@@ -50,6 +50,47 @@ if TYPE_CHECKING:
 logger = get_logger("PFC-Replyer")
 
 
+# ============== 共享检查逻辑 ==============
+
+_INAPPROPRIATE_PATTERNS = [
+    "作为AI", "作为一个AI", "作为人工智能",
+    "我是AI", "我是一个AI", "我是人工智能",
+    "抱歉，我无法", "对不起，我不能"
+]
+
+
+def check_basic_reply_quality(reply: str, max_length: int = 500) -> tuple[bool, str]:
+    """基本回复质量检查"""
+    if not reply or len(reply.strip()) == 0:
+        return False, "回复为空"
+    if len(reply) > max_length:
+        return False, "回复过长"
+    for pattern in _INAPPROPRIATE_PATTERNS:
+        if pattern in reply:
+            return False, f"包含不当内容: {pattern}"
+    return True, ""
+
+
+def check_reply_similarity(reply: str, chat_history: list, threshold: float = 0.8) -> tuple[bool, str]:
+    """检查回复与历史消息的相似度"""
+    if not chat_history:
+        return True, ""
+    
+    for msg in reversed(chat_history[-5:]):
+        if msg.get("type") == "bot_message":
+            content = msg.get("content", "")
+            if content == reply:
+                return False, "回复内容与你上一条发言完全相同"
+            
+            import difflib
+            ratio = difflib.SequenceMatcher(None, reply, content).ratio()
+            if ratio > threshold:
+                return False, f"回复内容与你上一条发言高度相似 (相似度 {ratio:.2f})"
+            break
+    
+    return True, ""
+
+
 # ============== Prompt 模板 ==============
 
 # Prompt for direct_reply (首次回复)
@@ -66,6 +107,7 @@ PROMPT_DIRECT_REPLY = """{persona_text}
 当前对话目标：{goals_str}
 
 {knowledge_info_str}
+{tool_info_str}
 
 最近的聊天记录：
 {chat_history_text}
@@ -100,6 +142,7 @@ PROMPT_SEND_NEW_MESSAGE = """{persona_text}
 当前对话目标：{goals_str}
 
 {knowledge_info_str}
+{tool_info_str}
 
 最近的聊天记录：
 {chat_history_text}
@@ -288,14 +331,64 @@ class ReplyGenerator:
         # 使用共享模块获取当前时间字符串
         current_time_str = get_current_time_str()
         
+        # ========== 新增：构建工具信息 ==========
+        tool_info_str = await self._build_tool_info(chat_history_text, observation_info)
+        # ========================================
+        
         return {
             "persona_text": persona_text,
             "goals_str": goals_str,
             "knowledge_info_str": knowledge_info_str,
+            "tool_info_str": tool_info_str,
             "chat_history_text": chat_history_text,
             "reply_style": reply_style,
             "current_time_str": current_time_str,
         }
+    
+    async def _build_tool_info(
+        self,
+        chat_history_text: str,
+        observation_info: ObservationInfo
+    ) -> str:
+        """构建工具信息块
+        
+        使用 context_builder 中的 PFCContextBuilder 构建工具信息
+        如果配置禁用了工具调用，则返回空字符串
+        """
+        # 检查是否启用工具调用
+        if not self.config.tool.enabled:
+            return ""
+        
+        # 检查是否在回复生成器中启用
+        if not self.config.tool.enable_in_replyer:
+            return ""
+        
+        try:
+            from .context_builder import PFCContextBuilder
+            
+            builder = PFCContextBuilder(self.session.stream_id, self.config)
+            
+            # 获取最后一条消息作为目标消息
+            target_message = ""
+            if observation_info.chat_history:
+                last_msg = observation_info.chat_history[-1]
+                target_message = last_msg.get("content", "")
+            
+            # 构建工具信息
+            tool_info = await builder.build_tool_info(
+                chat_history=chat_history_text,
+                sender_name=self.user_name,
+                target_message=target_message,
+                enable_tool=True,
+            )
+            
+            return tool_info
+            
+        except Exception as e:
+            logger.error(f"[私聊][{self.user_name}] 构建工具信息失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return ""
     
     async def _build_chat_history_text(
         self,
@@ -425,77 +518,16 @@ class ReplyGenerator:
             return PROMPT_DIRECT_REPLY
     
     async def check_reply(self, reply: str, goal: str) -> tuple[bool, str, bool]:
-        """
-        检查回复是否合适
+        """检查回复是否合适"""
+        valid, reason = check_basic_reply_quality(reply)
+        if not valid:
+            return False, reason, True
         
-        Args:
-            reply: 生成的回复
-            goal: 当前目标
-            
-        Returns:
-            (is_suitable, reason, need_replan) 元组
-        """
-        # 基本检查
-        if not reply or len(reply.strip()) == 0:
-            return False, "回复为空", True
-        
-        # 检查是否过长
-        if len(reply) > 500:
-            return False, "回复过长", True
-        
-        # 检查是否包含不当内容
-        inappropriate_patterns = [
-            "作为AI", "作为一个AI", "作为人工智能",
-            "我是AI", "我是一个AI", "我是人工智能",
-            "抱歉，我无法", "对不起，我不能"
-        ]
-        
-        for pattern in inappropriate_patterns:
-            if pattern in reply:
-                return False, f"包含不当内容: {pattern}", True
-        
-        # 检查是否与最近的回复重复
-        chat_history = self.session.observation_info.chat_history
-        if chat_history:
-            recent_bot_replies = [
-                msg.get("content", "")
-                for msg in chat_history[-5:]
-                if msg.get("type") == "bot_message"
-            ]
-            
-            for recent_reply in recent_bot_replies:
-                if self._is_similar(reply, recent_reply):
-                    return False, "与最近的回复过于相似", True
+        valid, reason = check_reply_similarity(reply, self.session.observation_info.chat_history)
+        if not valid:
+            return False, reason, True
         
         return True, "回复检查通过", False
-    
-    def _is_similar(self, text1: str, text2: str, threshold: float = 0.8) -> bool:
-        """
-        检查两段文本是否相似
-        
-        Args:
-            text1: 文本1
-            text2: 文本2
-            threshold: 相似度阈值
-            
-        Returns:
-            是否相似
-        """
-        if not text1 or not text2:
-            return False
-        
-        # 简单的字符集重叠率
-        set1 = set(text1)
-        set2 = set(text2)
-        
-        intersection = len(set1 & set2)
-        union = len(set1 | set2)
-        
-        if union == 0:
-            return False
-        
-        similarity = intersection / union
-        return similarity >= threshold
     
     def _clean_response(self, response: str) -> str:
         """
@@ -589,59 +621,17 @@ class ReplyChecker:
             return True, "检查器已禁用，直接通过", False
         
         # 基本检查
-        if not reply or len(reply.strip()) == 0:
-            return False, "回复为空", True
+        valid, reason = check_basic_reply_quality(reply)
+        if not valid:
+            return False, reason, True
         
-        # 检查是否过长
-        if len(reply) > 500:
-            return False, "回复过长", True
+        # 相似度检查
+        valid, reason = check_reply_similarity(reply, chat_history, self.checker_config.similarity_threshold)
+        if not valid:
+            logger.warning(f"[私聊][{self.private_name}]ReplyChecker {reason}: '{reply}'")
+            return False, f"被逻辑检查拒绝：{reason}，可以选择深入话题或寻找其它话题或等待。", True
         
-        # 检查是否包含不当内容
-        inappropriate_patterns = [
-            "作为AI", "作为一个AI", "作为人工智能",
-            "我是AI", "我是一个AI", "我是人工智能",
-            "抱歉，我无法", "对不起，我不能"
-        ]
-        
-        for pattern in inappropriate_patterns:
-            if pattern in reply:
-                return False, f"包含不当内容: {pattern}", True
-        
-        # 相似度检查 - 检查是否与最近的 Bot 回复重复
-        try:
-            bot_messages = self._get_recent_bot_messages(chat_history)
-            if bot_messages:
-                # 完全相同检查
-                if reply == bot_messages[0]:
-                    logger.warning(
-                        f"[私聊][{self.private_name}]ReplyChecker 检测到回复与上一条 Bot 消息完全相同: '{reply}'"
-                    )
-                    return (
-                        False,
-                        "被逻辑检查拒绝：回复内容与你上一条发言完全相同，可以选择深入话题或寻找其它话题或等待",
-                        True,
-                    )
-                
-                # 相似度检查
-                import difflib
-                similarity_ratio = difflib.SequenceMatcher(None, reply, bot_messages[0]).ratio()
-                logger.debug(f"[私聊][{self.private_name}]ReplyChecker - 相似度: {similarity_ratio:.2f}")
-                
-                if similarity_ratio > self.checker_config.similarity_threshold:
-                    logger.warning(
-                        f"[私聊][{self.private_name}]ReplyChecker 检测到回复与上一条 Bot 消息高度相似 "
-                        f"(相似度 {similarity_ratio:.2f}): '{reply}'"
-                    )
-                    return (
-                        False,
-                        f"被逻辑检查拒绝：回复内容与你上一条发言高度相似 (相似度 {similarity_ratio:.2f})，"
-                        "可以选择深入话题或寻找其它话题或等待。",
-                        True,
-                    )
-        except Exception as e:
-            import traceback
-            logger.error(f"[私聊][{self.private_name}]检查回复时出错: 类型={type(e)}, 值={e}")
-            logger.error(f"[私聊][{self.private_name}]{traceback.format_exc()}")
+        logger.debug(f"[私聊][{self.private_name}]ReplyChecker - 相似度检查通过")
         
         # 如果启用 LLM 检查，调用 LLM 进行深度检查
         if self.checker_config.use_llm_check:
@@ -656,25 +646,6 @@ class ReplyChecker:
             return True, "重试次数过多，接受当前回复", False
         
         return True, "回复检查通过", False
-    
-    def _get_recent_bot_messages(self, chat_history: List[Dict[str, Any]]) -> List[str]:
-        """获取最近的 Bot 消息"""
-        bot_messages = []
-        bot_qq = str(global_config.bot.qq_account) if global_config else ""
-        
-        for msg in reversed(chat_history):
-            sender = msg.get("sender", {})
-            user_id = str(sender.get("user_id", ""))
-            
-            if user_id == bot_qq:
-                content = msg.get("processed_plain_text", msg.get("content", ""))
-                if content:
-                    bot_messages.append(content)
-            
-            if len(bot_messages) >= 2:
-                break
-        
-        return bot_messages
     
     async def _llm_check(
         self,

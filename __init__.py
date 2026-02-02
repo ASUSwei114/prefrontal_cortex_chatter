@@ -49,84 +49,34 @@ from .models import (
 # 导入 plugin 模块（配置相关）
 from .plugin import PFCConfig, PrefrontalCortexChatterPlugin
 
-# 延迟导入其他模块以避免循环导入
-def _get_chatter():
-    from .chatter import PrefrontalCortexChatter
-    return PrefrontalCortexChatter
+# 延迟导入映射表：属性名 -> (模块路径, 导入名列表)
+_LAZY_IMPORTS = {
+    "PrefrontalCortexChatter": (".chatter", ["PrefrontalCortexChatter"]),
+    "GoalAnalyzer": (".goal_analyzer", ["GoalAnalyzer"]),
+    "KnowledgeFetcher": (".knowledge_fetcher", ["KnowledgeFetcher"]),
+    "ActionPlanner": (".planner", ["ActionPlanner"]),
+    "ReplyChecker": (".replyer", ["ReplyChecker", "ReplyGenerator"]),
+    "ReplyGenerator": (".replyer", ["ReplyChecker", "ReplyGenerator"]),
+    "PFCSession": (".session", ["PFCSession", "SessionManager", "get_session_manager"]),
+    "SessionManager": (".session", ["PFCSession", "SessionManager", "get_session_manager"]),
+    "get_session_manager": (".session", ["PFCSession", "SessionManager", "get_session_manager"]),
+    "Waiter": (".waiter", ["Waiter"]),
+}
+_lazy_cache = {}
 
-def _get_goal_analyzer():
-    from .goal_analyzer import GoalAnalyzer
-    return GoalAnalyzer
-
-def _get_knowledge_fetcher():
-    from .knowledge_fetcher import KnowledgeFetcher
-    return KnowledgeFetcher
-
-def _get_action_planner():
-    from .planner import ActionPlanner
-    return ActionPlanner
-
-def _get_replyer_classes():
-    from .replyer import ReplyChecker, ReplyGenerator
-    return ReplyChecker, ReplyGenerator
-
-def _get_session_classes():
-    from .session import PFCSession, SessionManager, get_session_manager
-    return PFCSession, SessionManager, get_session_manager
-
-def _get_waiter():
-    from .waiter import Waiter
-    return Waiter
-
-# 为了保持向后兼容，在模块级别提供这些类
-# 注意：这些导入会在模块首次被访问时执行
-PrefrontalCortexChatter = None
-GoalAnalyzer = None
-KnowledgeFetcher = None
-ActionPlanner = None
-ReplyChecker = None
-ReplyGenerator = None
-PFCSession = None
-SessionManager = None
-get_session_manager = None
-Waiter = None
 
 def __getattr__(name):
     """延迟加载模块属性"""
-    global PrefrontalCortexChatter, GoalAnalyzer, KnowledgeFetcher, ActionPlanner
-    global ReplyChecker, ReplyGenerator, PFCSession, SessionManager, get_session_manager, Waiter
+    if name in _lazy_cache:
+        return _lazy_cache[name]
+    if name not in _LAZY_IMPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     
-    if name == "PrefrontalCortexChatter":
-        PrefrontalCortexChatter = _get_chatter()
-        return PrefrontalCortexChatter
-    elif name == "GoalAnalyzer":
-        GoalAnalyzer = _get_goal_analyzer()
-        return GoalAnalyzer
-    elif name == "KnowledgeFetcher":
-        KnowledgeFetcher = _get_knowledge_fetcher()
-        return KnowledgeFetcher
-    elif name == "ActionPlanner":
-        ActionPlanner = _get_action_planner()
-        return ActionPlanner
-    elif name == "ReplyChecker":
-        ReplyChecker, ReplyGenerator = _get_replyer_classes()
-        return ReplyChecker
-    elif name == "ReplyGenerator":
-        ReplyChecker, ReplyGenerator = _get_replyer_classes()
-        return ReplyGenerator
-    elif name == "PFCSession":
-        PFCSession, SessionManager, get_session_manager = _get_session_classes()
-        return PFCSession
-    elif name == "SessionManager":
-        PFCSession, SessionManager, get_session_manager = _get_session_classes()
-        return SessionManager
-    elif name == "get_session_manager":
-        PFCSession, SessionManager, get_session_manager = _get_session_classes()
-        return get_session_manager
-    elif name == "Waiter":
-        Waiter = _get_waiter()
-        return Waiter
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_path, import_names = _LAZY_IMPORTS[name]
+    module = __import__(module_path, globals(), locals(), import_names, level=1)
+    for attr in import_names:
+        _lazy_cache[attr] = getattr(module, attr)
+    return _lazy_cache[name]
 
 __plugin_meta__ = PluginMetadata(
     name="Prefrontal Cortex Chatter",

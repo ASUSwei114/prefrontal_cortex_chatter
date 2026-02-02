@@ -396,151 +396,76 @@ def format_new_messages(
     return "\n".join(new_blocks).strip(), len(new_blocks) // 3
 
 
-def build_action_history_table(
-    action_history: list[dict[str, Any]],
-    max_cell_length: int = 500,
-) -> str:
-    """
-    构建结构化表格形式的行动历史
-    
-    参考 KFC 的 table 格式，为 PFC 的行动历史提供更高信息密度的展示
-    
-    统一列：序号 / 时间 / 行动类型 / 规划原因 / 状态 / 失败原因
-    
-    Args:
-        action_history: 行动历史列表
-        max_cell_length: 每个单元格最大字符数
-        
-    Returns:
-        Markdown 表格格式的行动历史
-    """
+def _truncate_text(text: str, limit: int) -> str:
+    """截断文本到指定长度"""
+    if not text or limit <= 0:
+        return text or ""
+    text = text.strip()
+    return text if len(text) <= limit else (text[:max(0, limit - 1)] + "…")
+
+
+def _format_md_cell(value: str, max_length: int = 500) -> str:
+    """格式化为 Markdown 表格单元格"""
+    value = (value or "").replace("\r\n", "\n").replace("\n", "<br>").replace("|", "\\|")
+    return _truncate_text(value, max_length)
+
+
+def _build_md_table(header: list[str], rows: list[list[str]], title: str = "") -> str:
+    """构建 Markdown 表格"""
+    lines = [
+        "|" + "|".join(header) + "|",
+        "|" + "|".join(["---"] * len(header)) + "|",
+    ]
+    lines.extend("|" + "|".join(row) + "|" for row in rows)
+    return (f"{title}\n" if title else "") + "\n".join(lines)
+
+
+# 行动类型和状态的中文映射
+_ACTION_TYPE_ALIAS = {
+    "direct_reply": "直接回复", "send_new_message": "发送新消息",
+    "fetch_knowledge": "调取知识", "wait": "等待", "listening": "倾听",
+    "rethink_goal": "重新思考目标", "end_conversation": "结束对话",
+    "say_goodbye": "告别", "block_and_ignore": "屏蔽忽略",
+}
+_STATUS_ALIAS = {"done": "成功", "recall": "取消/失败"}
+
+
+def build_action_history_table(action_history: list[dict[str, Any]], max_cell_length: int = 500) -> str:
+    """构建结构化表格形式的行动历史"""
     if not action_history:
         return "- 还没有执行过行动。\n"
     
-    def truncate(text: str, limit: int) -> str:
-        """截断文本"""
-        if not text:
-            return ""
-        if limit <= 0:
-            return text
-        text = text.strip()
-        return text if len(text) <= limit else (text[: max(0, limit - 1)] + "…")
-    
-    def md_cell(value: str) -> str:
-        """格式化为 Markdown 表格单元格"""
-        value = (value or "").replace("\r\n", "\n").replace("\n", "<br>")
-        value = value.replace("|", "\\|")
-        return truncate(value, max_cell_length)
-    
-    # 行动类型中文映射
-    action_type_alias = {
-        "direct_reply": "直接回复",
-        "send_new_message": "发送新消息",
-        "fetch_knowledge": "调取知识",
-        "wait": "等待",
-        "listening": "倾听",
-        "rethink_goal": "重新思考目标",
-        "end_conversation": "结束对话",
-        "say_goodbye": "告别",
-        "block_and_ignore": "屏蔽忽略",
-    }
-    
-    # 状态中文映射
-    status_alias = {
-        "done": "成功",
-        "recall": "取消/失败",
-    }
-    
-    header = ["#", "时间", "行动类型", "规划原因", "状态", "失败原因"]
-    lines = [
-        "|" + "|".join(header) + "|",
-        "|" + "|".join(["---"] * len(header)) + "|",
-    ]
-    
+    rows = []
     for idx, action_data in enumerate(action_history, 1):
         if not isinstance(action_data, dict):
             continue
-        
-        # 提取字段
         action_type = action_data.get("action", "未知")
-        plan_reason = action_data.get("plan_reason", "未知规划原因")
-        status = action_data.get("status", "未知")
-        final_reason = action_data.get("final_reason", "")
-        action_time = action_data.get("time", "")
-        
-        # 转换为中文
-        type_str = action_type_alias.get(action_type, action_type) or action_type
-        status_str = status_alias.get(status, status) or status
-        
-        row = [
+        rows.append([
             str(idx),
-            md_cell(str(action_time)),
-            md_cell(str(type_str)),
-            md_cell(str(plan_reason)),
-            md_cell(str(status_str)),
-            md_cell(str(final_reason)) if final_reason else "",
-        ]
-        lines.append("|" + "|".join(row) + "|")
+            _format_md_cell(str(action_data.get("time", "")), max_cell_length),
+            _format_md_cell(_ACTION_TYPE_ALIAS.get(action_type, action_type), max_cell_length),
+            _format_md_cell(str(action_data.get("plan_reason", "未知规划原因")), max_cell_length),
+            _format_md_cell(_STATUS_ALIAS.get(action_data.get("status", ""), action_data.get("status", "未知")), max_cell_length),
+            _format_md_cell(str(action_data.get("final_reason", "")), max_cell_length),
+        ])
     
-    return "（结构化行动历史表；按时间顺序）\n" + "\n".join(lines)
+    return _build_md_table(
+        ["#", "时间", "行动类型", "规划原因", "状态", "失败原因"],
+        rows, "（结构化行动历史表；按时间顺序）"
+    )
 
 
 def build_chat_history_table(
-    chat_history: list[dict[str, Any]],
-    bot_name: str = "Bot",
-    user_name: str = "用户",
-    max_messages: int = 30,
-    max_cell_length: int = 500,
+    chat_history: list[dict[str, Any]], bot_name: str = "Bot",
+    user_name: str = "用户", max_messages: int = 30, max_cell_length: int = 500,
 ) -> str:
-    """
-    构建结构化表格形式的聊天历史
-    
-    参考 KFC 的 table 格式，为 PFC 的聊天历史提供更高信息密度的展示
-    
-    统一列：序号 / 时间 / 发言人 / 内容
-    
-    Args:
-        chat_history: 聊天历史列表
-        bot_name: 机器人名称
-        user_name: 用户名称
-        max_messages: 最大消息数量
-        max_cell_length: 每个单元格最大字符数
-        
-    Returns:
-        Markdown 表格格式的聊天历史
-    """
+    """构建结构化表格形式的聊天历史"""
     if not chat_history:
         return "还没有聊天记录。"
     
-    def truncate(text: str, limit: int) -> str:
-        """截断文本"""
-        if not text:
-            return ""
-        if limit <= 0:
-            return text
-        text = text.strip()
-        return text if len(text) <= limit else (text[: max(0, limit - 1)] + "…")
-    
-    def md_cell(value: str) -> str:
-        """格式化为 Markdown 表格单元格"""
-        value = (value or "").replace("\r\n", "\n").replace("\n", "<br>")
-        value = value.replace("|", "\\|")
-        return truncate(value, max_cell_length)
-    
-    header = ["#", "时间", "发言人", "内容"]
-    lines = [
-        "|" + "|".join(header) + "|",
-        "|" + "|".join(["---"] * len(header)) + "|",
-    ]
-    
-    recent_messages = chat_history[-max_messages:]
-    
-    for idx, msg in enumerate(recent_messages, 1):
+    rows = []
+    for idx, msg in enumerate(chat_history[-max_messages:], 1):
         msg_type = msg.get("type", "")
-        content = msg.get("content", "").strip()
-        msg_time = msg.get("time", time.time())
-        readable_time = translate_timestamp(msg_time, mode="lite")
-        
         if msg_type == "user_message":
             speaker = msg.get("user_name", user_name)
         elif msg_type == "bot_message":
@@ -548,16 +473,15 @@ def build_chat_history_table(
         else:
             continue
         
-        # 去掉结尾的句号（保持一致性）
+        content = msg.get("content", "").strip()
         if content.endswith("。"):
             content = content[:-1]
         
-        row = [
+        rows.append([
             str(idx),
-            md_cell(readable_time),
-            md_cell(speaker),
-            md_cell(content),
-        ]
-        lines.append("|" + "|".join(row) + "|")
+            _format_md_cell(translate_timestamp(msg.get("time", time.time()), mode="lite"), max_cell_length),
+            _format_md_cell(speaker, max_cell_length),
+            _format_md_cell(content, max_cell_length),
+        ])
     
-    return "（结构化聊天历史表；按时间顺序）\n" + "\n".join(lines)
+    return _build_md_table(["#", "时间", "发言人", "内容"], rows, "（结构化聊天历史表；按时间顺序）")
