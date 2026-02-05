@@ -22,17 +22,15 @@ Prefrontal Cortex Chatter - 插件注册与配置
 ================================================================================
 """
 
+import dataclasses
 import sys
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, TYPE_CHECKING
+from typing import Any, ClassVar
 
 from src.common.logger import get_logger
 from src.plugin_system import register_plugin
 from src.plugin_system.base.base_plugin import BasePlugin
 from src.plugin_system.base.config_types import ConfigField
-
-if TYPE_CHECKING:
-    from .chatter import PrefrontalCortexChatter as _PrefrontalCortexChatter
 
 logger = get_logger("pfc_plugin")
 
@@ -49,14 +47,12 @@ class ReplyCheckerConfig:
     similarity_threshold: float = 0.9
     max_retries: int = 3
 
-
 @dataclass
 class ToolConfig:
     """工具调用配置"""
     enabled: bool = True
     enable_in_planner: bool = True
-    enable_in_replyer: bool = True
-
+    enable_in_replyer: bool = False
 
 @dataclass
 class WebSearchConfig:
@@ -66,15 +62,13 @@ class WebSearchConfig:
     time_range: str = "any"
     answer_mode: bool = False
 
-
 @dataclass
 class WaitingConfig:
     """等待配置"""
     wait_timeout_seconds: int = 300
     block_ignore_seconds: int = 1800
-    enable_block_action: bool = True  # 是否启用 block_and_ignore 动作
-    clear_goals_on_timeout: bool = False  # 等待超时时是否清空旧目标
-
+    enable_block_action: bool = True
+    clear_goals_on_timeout: bool = False
 
 @dataclass
 class SessionConfig:
@@ -83,15 +77,13 @@ class SessionConfig:
     max_history_entries: int = 100
     initial_history_limit: int = 30
 
-
 @dataclass
 class PromptConfig:
     """提示词配置"""
     activity_stream_format: str = "narrative"
     max_activity_entries: int = 30
     max_entry_length: int = 500
-    inject_system_prompt: bool = False  # 是否注入 MoFox 系统提示词
-
+    inject_system_prompt: bool = False
 
 @dataclass
 class PFCConfig:
@@ -103,129 +95,83 @@ class PFCConfig:
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
     tool: ToolConfig = field(default_factory=ToolConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
-    
+
     @property
     def enabled_stream_types(self) -> list[str]:
-        """启用的消息源类型（硬编码为 private）"""
         return ["private"]
 
 
-# 全局配置单例 - 使用 sys.modules 确保跨模块实例共享
-# 由于插件管理器使用 spec_from_file_location 加载模块，可能导致模块被多次实例化
-# 使用 sys.modules 中的特殊键来存储配置，确保所有导入都共享同一份配置
+# ============================================================================
+# 全局配置管理
+# ============================================================================
+
 _CONFIG_KEY = "_pfc_plugin_config_holder"
 
-def _get_config_holder() -> dict[str, Any]:
-    """获取全局配置持有者字典"""
+def _get_holder() -> dict[str, Any]:
+    """获取全局配置持有者"""
     if _CONFIG_KEY not in sys.modules:
         sys.modules[_CONFIG_KEY] = {"config": None, "plugin_config": None}  # type: ignore
     return sys.modules[_CONFIG_KEY]  # type: ignore
 
-
 def set_plugin_config(config_dict: dict[str, Any]) -> None:
-    """设置插件配置（由插件调用）"""
-    holder = _get_config_holder()
+    """设置插件配置"""
+    holder = _get_holder()
     holder["plugin_config"] = config_dict
-    holder["config"] = None  # 重置缓存，下次获取时重新加载
-    logger.info("[PFC] set_plugin_config: 已设置插件配置")
-
+    holder["config"] = None
+    logger.info("[PFC] 已设置插件配置")
 
 def get_config() -> PFCConfig:
     """获取全局配置"""
-    holder = _get_config_holder()
+    holder = _get_holder()
     if holder["config"] is None:
-        holder["config"] = _load_config()
+        holder["config"] = _load_config(holder["plugin_config"])
     return holder["config"]
 
+def reload_config() -> PFCConfig:
+    """重新加载配置"""
+    holder = _get_holder()
+    holder["config"] = _load_config(holder["plugin_config"])
+    return holder["config"]
 
 def _dict_to_dataclass(cls, data: dict):
     """将字典转换为 dataclass 实例"""
-    import dataclasses
-    fields = {f.name: f.default for f in dataclasses.fields(cls)}
-    return cls(**{k: data.get(k, v) for k, v in fields.items()})
+    defaults = {f.name: f.default for f in dataclasses.fields(cls)}
+    return cls(**{k: data.get(k, v) for k, v in defaults.items()})
 
-
-def _load_config_internal(enabled: bool, waiting: dict, session: dict,
-                          reply_checker: dict, web_search: dict, tool: dict, prompt: dict) -> PFCConfig:
-    """内部配置加载函数"""
+def _load_config(plugin_cfg: dict[str, Any] | None) -> PFCConfig:
+    """加载 PFC 配置"""
     try:
+        if plugin_cfg:
+            cfg, get = plugin_cfg, lambda k: plugin_cfg.get(k, {})
+            enabled = cfg.get("plugin", {}).get("enabled", True)
+        else:
+            from src.config.config import global_config
+            if not global_config or not hasattr(global_config, "prefrontal_cortex_chatter"):
+                return PFCConfig()
+            pfc = global_config.prefrontal_cortex_chatter
+            get = lambda k: {a: getattr(getattr(pfc, k, None), a)
+                            for a in dir(getattr(pfc, k, None) or object()) if not a.startswith('_')}
+            enabled = getattr(getattr(pfc, "plugin", None), "enabled", True)
+        
         return PFCConfig(
             enabled=enabled,
-            waiting=_dict_to_dataclass(WaitingConfig, waiting),
-            session=_dict_to_dataclass(SessionConfig, session),
-            reply_checker=_dict_to_dataclass(ReplyCheckerConfig, reply_checker),
-            web_search=_dict_to_dataclass(WebSearchConfig, web_search),
-            tool=_dict_to_dataclass(ToolConfig, tool),
-            prompt=_dict_to_dataclass(PromptConfig, prompt),
+            waiting=_dict_to_dataclass(WaitingConfig, get("waiting")),
+            session=_dict_to_dataclass(SessionConfig, get("session")),
+            reply_checker=_dict_to_dataclass(ReplyCheckerConfig, get("reply_checker")),
+            web_search=_dict_to_dataclass(WebSearchConfig, get("web_search")),
+            tool=_dict_to_dataclass(ToolConfig, get("tool")),
+            prompt=_dict_to_dataclass(PromptConfig, get("prompt")),
         )
     except Exception as e:
         logger.warning(f"配置加载失败，使用默认值: {e}")
         return PFCConfig()
 
 
-def _load_config() -> PFCConfig:
-    """加载 PFC 配置"""
-    holder = _get_config_holder()
-    
-    if holder["plugin_config"]:
-        return _load_from_plugin_config(holder["plugin_config"])
-    else:
-        return _load_from_global_config()
-
-
-def _extract_config_sections(cfg: Any, is_dict: bool = True) -> tuple:
-    """提取配置各部分"""
-    if is_dict:
-        get = lambda k, d={}: cfg.get(k, d)
-        enabled = cfg.get("plugin", {}).get("enabled", True)
-    else:
-        get = lambda k, d={}: {a: getattr(getattr(cfg, k, None), a, None)
-                               for a in dir(getattr(cfg, k, None) or object()) if not a.startswith('_')}
-        enabled = getattr(getattr(cfg, "plugin", None), "enabled", True)
-    return enabled, get("waiting"), get("session"), get("reply_checker"), get("web_search"), get("tool"), get("prompt")
-
-
-def _load_from_plugin_config(cfg: dict[str, Any]) -> PFCConfig:
-    """从插件配置字典加载配置"""
-    return _load_config_internal(*_extract_config_sections(cfg, is_dict=True))
-
-
-def _load_from_global_config() -> PFCConfig:
-    """从全局配置加载 PFC 配置（兼容旧版）"""
-    from src.config.config import global_config
-    if not global_config or not hasattr(global_config, "prefrontal_cortex_chatter"):
-        return PFCConfig()
-    return _load_config_internal(*_extract_config_sections(
-        getattr(global_config, "prefrontal_cortex_chatter"), is_dict=False))
-
-
-def reload_config() -> PFCConfig:
-    """重新加载配置"""
-    holder = _get_config_holder()
-    holder["config"] = _load_config()
-    return holder["config"]
-
-
 # ============================================================================
-# 插件组件（延迟导入以避免循环导入）
+# 插件类
 # ============================================================================
 
-
-def _get_chatter_class():
-    """延迟获取 PrefrontalCortexChatter 类"""
-    from .chatter import PrefrontalCortexChatter
-    return PrefrontalCortexChatter
-
-
-def _get_reply_action_class():
-    """延迟获取 PFCReplyAction 类"""
-    from .actions.reply import PFCReplyAction
-    return PFCReplyAction
-
-
-# 配置文件版本号 - 更新配置结构时递增此版本
 CONFIG_VERSION = "1.5.0"
-
 
 @register_plugin
 class PrefrontalCortexChatterPlugin(BasePlugin):
@@ -239,23 +185,14 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
     config_file_name: str = "config.toml"
 
     config_section_descriptions: ClassVar[dict[str, str]] = {
-        "inner": "配置元信息",
-        "plugin": "插件基础配置",
-        "waiting": "等待行为配置",
-        "session": "会话管理配置",
-        "reply_checker": "回复检查器配置",
-        "web_search": "联网搜索配置",
-        "tool": "工具调用配置",
-        "prompt": "提示词配置",
+        "inner": "配置元信息", "plugin": "插件基础配置", "waiting": "等待行为配置",
+        "session": "会话管理配置", "reply_checker": "回复检查器配置",
+        "web_search": "联网搜索配置", "tool": "工具调用配置", "prompt": "提示词配置",
     }
 
     config_schema: ClassVar[dict[str, dict[str, ConfigField]]] = {
-        "inner": {
-            "version": ConfigField(type=str, default=CONFIG_VERSION, description="配置文件版本号"),
-        },
-        "plugin": {
-            "enabled": ConfigField(type=bool, default=True, description="是否启用 PFC 私聊聊天器"),
-        },
+        "inner": {"version": ConfigField(type=str, default=CONFIG_VERSION, description="配置文件版本号")},
+        "plugin": {"enabled": ConfigField(type=bool, default=True, description="是否启用 PFC 私聊聊天器")},
         "waiting": {
             "wait_timeout_seconds": ConfigField(type=int, default=300, description="等待超时时间（秒）"),
             "block_ignore_seconds": ConfigField(type=int, default=1800, description="屏蔽忽略时间（秒）"),
@@ -279,35 +216,24 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             "answer_mode": ConfigField(type=bool, default=False, description="是否启用答案模式"),
         },
         "tool": {
-            "enabled": ConfigField(type=bool, default=True, description="是否启用工具调用（类似 KFC 的工具调用功能）"),
+            "enabled": ConfigField(type=bool, default=True, description="是否启用工具调用"),
             "enable_in_planner": ConfigField(type=bool, default=True, description="是否在规划器中显示工具信息"),
             "enable_in_replyer": ConfigField(type=bool, default=True, description="是否在回复生成器中显示工具信息"),
         },
         "prompt": {
-            "activity_stream_format": ConfigField(
-                type=str,
-                default="narrative",
-                description="活动流格式：narrative（线性叙事）/ table（结构化表格）/ both（两者都给）"
-            ),
+            "activity_stream_format": ConfigField(type=str, default="narrative", description="活动流格式"),
             "max_activity_entries": ConfigField(type=int, default=30, description="活动记录保留条数"),
             "max_entry_length": ConfigField(type=int, default=500, description="每条记录最大字符数"),
-            "inject_system_prompt": ConfigField(
-                type=bool,
-                default=False,
-                description="是否注入 MoFox 系统提示词（启用后会使用 replyer_private 模型配置）"
-            ),
+            "inject_system_prompt": ConfigField(type=bool, default=False, description="是否注入 MoFox 系统提示词"),
         },
     }
 
     async def on_plugin_loaded(self):
         """插件加载时"""
         set_plugin_config(self.config)
-        config = get_config()
-
-        if not config.enabled:
+        if not get_config().enabled:
             logger.info("[PFC] 插件已禁用")
             return
-
         await self._ensure_database_tables()
         logger.info(f"[PFC] 插件已加载 (v{self.config.get('inner', {}).get('version', 'unknown')})")
 
@@ -323,32 +249,31 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
             raise RuntimeError(f"PFC 数据库初始化失败: {e}")
 
     async def on_plugin_unloaded(self):
-        """插件卸载时"""
         logger.info("[PFC] 插件已卸载")
 
     def get_plugin_components(self):
         """返回组件列表"""
         if not get_config().enabled:
             return []
-
+        
         components = []
-        for name, loader in [("Chatter", _get_chatter_class), ("ReplyAction", _get_reply_action_class)]:
+        loaders = [
+            ("chatter", "PrefrontalCortexChatter", "get_chatter_info"),
+            ("actions.reply", "PFCReplyAction", "get_action_info"),
+        ]
+        for module, cls_name, info_method in loaders:
             try:
-                cls = loader()
-                components.append((cls.get_chatter_info() if name == "Chatter" else cls.get_action_info(), cls))
-                logger.debug(f"[PFC] 成功加载 {name} 组件")
+                from importlib import import_module
+                mod = import_module(f".{module}", package=__package__)
+                cls = getattr(mod, cls_name)
+                components.append((getattr(cls, info_method)(), cls))
             except Exception as e:
-                logger.error(f"[PFC] 加载 {name} 组件失败: {e}")
-
+                logger.error(f"[PFC] 加载 {cls_name} 失败: {e}")
         return components
 
     def get_plugin_info(self) -> dict[str, Any]:
-        """获取插件信息"""
         return {
-            "name": self.plugin_name,
-            "display_name": "Prefrontal Cortex Chatter",
-            "version": "1.0.0",
-            "author": "MaiM-with-u",
-            "description": "目标驱动的私聊系统",
+            "name": self.plugin_name, "display_name": "Prefrontal Cortex Chatter",
+            "version": "1.0.0", "author": "MaiM-with-u", "description": "目标驱动的私聊系统",
             "features": ["目标驱动对话", "多种行动类型", "回复质量检查", "主动思考"],
         }

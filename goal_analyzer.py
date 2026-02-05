@@ -32,11 +32,12 @@ from src.plugin_system.apis import llm_api
 from src.config.config import global_config
 
 from .models import ObservationInfo, ConversationInfo
-from .utils import extract_json_from_text, extract_json_array_from_text
 from .shared import (
     PersonalityHelper,
     get_current_time_str,
     build_goals_string,
+    extract_json_from_text,
+    extract_json_array_from_text,
 )
 
 logger = get_logger("PFC-GoalAnalyzer")

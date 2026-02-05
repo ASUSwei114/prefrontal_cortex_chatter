@@ -60,7 +60,7 @@ _LAZY_IMPORTS = {
     "PFCSession": (".session", ["PFCSession", "SessionManager", "get_session_manager"]),
     "SessionManager": (".session", ["PFCSession", "SessionManager", "get_session_manager"]),
     "get_session_manager": (".session", ["PFCSession", "SessionManager", "get_session_manager"]),
-    "Waiter": (".waiter", ["Waiter"]),
+    "Waiter": (".conversation_loop", ["Waiter"]),
 }
 _lazy_cache = {}
 
@@ -72,8 +72,9 @@ def __getattr__(name):
     if name not in _LAZY_IMPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     
+    from importlib import import_module
     module_path, import_names = _LAZY_IMPORTS[name]
-    module = __import__(module_path, globals(), locals(), import_names, level=1)
+    module = import_module(module_path, package=__name__)
     for attr in import_names:
         _lazy_cache[attr] = getattr(module, attr)
     return _lazy_cache[name]
