@@ -1,4 +1,12 @@
-"""PFC 共享工具模块 - 提供各模块共享的工具函数和类 (GPL-3.0)"""
+"""PFC 共享工具模块 - 提供各模块共享的工具函数和类 (GPL-3.0)
+
+本模块包含以下功能：
+1. 时间格式化工具 - 将时间戳转换为人类可读格式
+2. 人格信息助手 - 获取和管理 Bot 的人格信息
+3. 文本构建工具 - 构建目标、知识、历史等格式化文本
+4. JSON 解析工具 - 从 LLM 响应中提取 JSON 数据
+5. 通用工具函数 - 文本处理、时间计算等
+"""
 
 import datetime
 import json
@@ -14,7 +22,18 @@ logger = get_logger("pfc_shared")
 
 
 def translate_timestamp(timestamp: float, mode: str = "relative") -> str:
-    """将时间戳转换为人类可读的时间格式"""
+    """将时间戳转换为人类可读的时间格式
+    
+    Args:
+        timestamp: Unix 时间戳
+        mode: 格式模式
+            - "relative": 相对时间（如"刚刚"、"5分钟前"）
+            - "normal": 完整日期时间（如"2024-12-01 14:30:00"）
+            - "lite": 仅时间（如"14:30:00"）
+    
+    Returns:
+        格式化后的时间字符串
+    """
     formats = {"normal": "%Y-%m-%d %H:%M:%S", "lite": "%H:%M:%S"}
     if mode in formats:
         return time.strftime(formats[mode], time.localtime(timestamp))
@@ -29,7 +48,11 @@ def translate_timestamp(timestamp: float, mode: str = "relative") -> str:
 
 
 def get_current_time_str() -> str:
-    """获取当前时间的人类可读格式"""
+    """获取当前时间的人类可读格式
+    
+    Returns:
+        格式化的当前时间，如 "2024年12月01日 星期五 下午 14:30"
+    """
     now = datetime.datetime.now()
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     hour = now.hour
@@ -43,9 +66,20 @@ def get_current_time_str() -> str:
 
 
 class PersonalityHelper:
-    """人格信息获取助手"""
+    """人格信息获取助手
+    
+    负责获取和管理 Bot 的人格信息，包括：
+    - 基础人格信息（名字、别名、性格等）
+    - 背景故事
+    - 回复风格
+    """
 
     def __init__(self, user_name: str = "用户"):
+        """初始化人格助手
+        
+        Args:
+            user_name: 对话用户的名称（用于日志记录）
+        """
         self.user_name = user_name
         self._personality_info: Optional[str] = None
         self.bot_name = global_config.bot.nickname if global_config else "Bot"
@@ -99,7 +133,14 @@ class PersonalityHelper:
 
 
 def build_goals_string(goal_list: list[dict[str, Any]] | None) -> str:
-    """构建对话目标字符串"""
+    """构建对话目标字符串
+    
+    Args:
+        goal_list: 目标列表，每项包含 "goal" 和 "reasoning" 字段
+    
+    Returns:
+        格式化的目标字符串，用于提示词
+    """
     if not goal_list:
         return "- 目前没有明确对话目标，请考虑设定一个。\n"
     goals = []
@@ -114,7 +155,14 @@ def build_goals_string(goal_list: list[dict[str, Any]] | None) -> str:
 
 
 def build_knowledge_string(knowledge_list: list[dict[str, Any]] | None) -> str:
-    """构建知识信息字符串"""
+    """构建知识信息字符串
+    
+    Args:
+        knowledge_list: 知识列表，每项包含 "query"、"knowledge"、"source" 字段
+    
+    Returns:
+        格式化的知识字符串，用于提示词
+    """
     result = "【已获取的相关知识和记忆】\n"
     if not knowledge_list:
         return result + "- 暂无相关知识和记忆。\n"
@@ -134,7 +182,17 @@ def build_knowledge_string(knowledge_list: list[dict[str, Any]] | None) -> str:
 
 def format_chat_history(chat_history: list[dict[str, Any]], bot_name: str = "Bot",
                         user_name: str = "用户", max_messages: int = 30) -> str:
-    """格式化聊天历史为可读文本"""
+    """格式化聊天历史为可读文本
+    
+    Args:
+        chat_history: 聊天历史列表
+        bot_name: Bot 名称
+        user_name: 用户名称
+        max_messages: 最多保留的消息条数
+    
+    Returns:
+        格式化的聊天历史文本
+    """
     if not chat_history:
         return "还没有聊天记录。"
 
@@ -252,7 +310,16 @@ def build_chat_history_table(chat_history: list[dict[str, Any]], bot_name: str =
 # ============================================================================
 
 def get_items_from_json(text: str, *keys: str, default: Any = None) -> tuple:
-    """从文本中提取JSON并获取指定键的值"""
+    """从文本中提取 JSON 并获取指定键的值
+    
+    Args:
+        text: 包含 JSON 的文本
+        *keys: 要提取的键名
+        default: 键不存在时的默认值
+    
+    Returns:
+        按键顺序返回的值组成的元组
+    """
     json_obj = extract_json_from_text(text)
     if json_obj is None:
         return tuple(default for _ in keys)
@@ -260,7 +327,19 @@ def get_items_from_json(text: str, *keys: str, default: Any = None) -> tuple:
 
 
 def extract_json_from_text(text: str) -> Optional[dict]:
-    """从文本中提取JSON对象"""
+    """从文本中提取 JSON 对象
+    
+    支持多种格式：
+    - 纯 JSON 字符串
+    - Markdown 代码块中的 JSON
+    - 文本中嵌入的 JSON
+    
+    Args:
+        text: 包含 JSON 的文本
+    
+    Returns:
+        解析后的字典，失败返回 None
+    """
     if not text:
         return None
     text = text.strip()
@@ -290,7 +369,14 @@ def extract_json_from_text(text: str) -> Optional[dict]:
 
 
 def extract_json_array_from_text(text: str) -> Optional[list]:
-    """从文本中提取JSON数组"""
+    """从文本中提取 JSON 数组
+    
+    Args:
+        text: 包含 JSON 数组的文本
+    
+    Returns:
+        解析后的列表，失败返回 None
+    """
     if not text:
         return None
     text = text.strip()
@@ -311,14 +397,30 @@ def extract_json_array_from_text(text: str) -> Optional[list]:
 
 
 def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
-    """截断文本到指定长度"""
+    """截断文本到指定长度
+    
+    Args:
+        text: 要截断的文本
+        max_length: 最大长度
+        suffix: 截断后添加的后缀
+    
+    Returns:
+        截断后的文本
+    """
     if not text or len(text) <= max_length:
         return text or ""
     return text[:max_length - len(suffix)] + suffix
 
 
 def format_time_delta(seconds: float) -> str:
-    """格式化时间差为人类可读格式"""
+    """格式化时间差为人类可读格式
+    
+    Args:
+        seconds: 时间差（秒）
+    
+    Returns:
+        格式化的时间差，如 "3小时25分"、"5分30秒"
+    """
     units = [(86400, "天", 3600), (3600, "小时", 60), (60, "分", 1), (1, "秒", 0)]
     for divisor, unit, sub_divisor in units:
         if seconds >= divisor:
@@ -331,7 +433,16 @@ def format_time_delta(seconds: float) -> str:
 
 
 def clean_llm_response(text: str) -> str:
-    """清理LLM响应文本"""
+    """清理 LLM 响应文本
+    
+    移除 Markdown 代码块标记和多余的引号
+    
+    Args:
+        text: LLM 原始响应
+    
+    Returns:
+        清理后的文本
+    """
     if not text:
         return ""
     text = text.strip()
@@ -345,7 +456,16 @@ def clean_llm_response(text: str) -> str:
 
 
 def safe_json_dumps(obj: Any, ensure_ascii: bool = False, indent: Optional[int] = None) -> str:
-    """安全的JSON序列化"""
+    """安全的 JSON 序列化
+    
+    Args:
+        obj: 要序列化的对象
+        ensure_ascii: 是否转义非 ASCII 字符
+        indent: 缩进空格数
+    
+    Returns:
+        JSON 字符串，失败返回 "{}"
+    """
     try:
         return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent)
     except (TypeError, ValueError) as e:
@@ -354,7 +474,15 @@ def safe_json_dumps(obj: Any, ensure_ascii: bool = False, indent: Optional[int] 
 
 
 def merge_dicts(base: dict, override: dict) -> dict:
-    """深度合并两个字典"""
+    """深度合并两个字典
+    
+    Args:
+        base: 基础字典
+        override: 覆盖字典
+    
+    Returns:
+        合并后的新字典
+    """
     result = base.copy()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -365,7 +493,18 @@ def merge_dicts(base: dict, override: dict) -> dict:
 
 
 def extract_thinking_and_content(text: str) -> tuple[str, str]:
-    """从LLM响应中分离思考过程和实际内容"""
+    """从 LLM 响应中分离思考过程和实际内容
+    
+    支持以下标记：
+    - <thinking>...</thinking>
+    - [思考]...[/思考]
+    
+    Args:
+        text: LLM 响应文本
+    
+    Returns:
+        (思考过程, 实际内容) 元组
+    """
     if not text:
         return "", ""
     patterns = [(r'<thinking>([\s\S]*?)</thinking>', re.IGNORECASE), (r'\[思考\]([\s\S]*?)\[/思考\]', 0)]
@@ -379,7 +518,14 @@ def extract_thinking_and_content(text: str) -> tuple[str, str]:
 
 
 def parse_action_from_response(text: str) -> Optional[dict]:
-    """从LLM响应中解析行动信息"""
+    """从 LLM 响应中解析行动信息
+    
+    Args:
+        text: LLM 响应文本
+    
+    Returns:
+        包含 "action_type" 字段的字典，失败返回 None
+    """
     json_obj = extract_json_from_text(text)
     if json_obj is None:
         return None
@@ -393,14 +539,34 @@ def parse_action_from_response(text: str) -> Optional[dict]:
 
 
 def format_message_for_context(sender: str, content: str, timestamp: Optional[str] = None, max_content_length: int = 500) -> str:
-    """格式化消息用于上下文展示"""
+    """格式化消息用于上下文展示
+    
+    Args:
+        sender: 发送者名称
+        content: 消息内容
+        timestamp: 时间戳（可选）
+        max_content_length: 内容最大长度
+    
+    Returns:
+        格式化的消息字符串
+    """
     content = truncate_text(content, max_content_length)
     return f"[{timestamp}] {sender}: {content}" if timestamp else f"{sender}: {content}"
 
 
 def calculate_response_urgency(time_since_last_message: float, is_mentioned: bool = False,
                                is_direct_message: bool = False, message_count: int = 1) -> float:
-    """计算响应紧急度 (0.0 - 1.0)"""
+    """计算响应紧急度
+    
+    Args:
+        time_since_last_message: 距上次消息的时间（秒）
+        is_mentioned: 是否被提及
+        is_direct_message: 是否为私聊
+        message_count: 消息数量
+    
+    Returns:
+        紧急度分数 (0.0 - 1.0)
+    """
     urgency = 0.0
     if time_since_last_message < 10:
         urgency += 0.3

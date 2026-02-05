@@ -41,63 +41,68 @@ logger = get_logger("pfc_plugin")
 
 @dataclass
 class ReplyCheckerConfig:
-    """回复检查器配置"""
-    enabled: bool = True
-    use_llm_check: bool = True
-    similarity_threshold: float = 0.9
-    max_retries: int = 3
+    """回复质量检查器配置"""
+    enabled: bool = True                    # 是否启用回复检查器
+    use_llm_check: bool = True             # 是否使用 LLM 进行深度检查（关闭则只做基础检查）
+    similarity_threshold: float = 0.9      # 相似度阈值（0-1），超过此值认为回复重复
+    max_retries: int = 3                   # 回复检查失败时的最大重试次数
 
 @dataclass
 class ToolConfig:
     """工具调用配置"""
-    enabled: bool = True
-    enable_in_planner: bool = True
-    enable_in_replyer: bool = False
+    enabled: bool = True                   # 是否启用工具调用功能（需要工具插件支持）
+    enable_in_planner: bool = True         # 是否在规划器中显示工具信息（帮助 AI 决策是否使用工具）
+    enable_in_replyer: bool = False        # 是否在回复生成器中显示工具信息（提供额外上下文）
 
 @dataclass
 class WebSearchConfig:
-    """联网搜索配置"""
-    enabled: bool = True
-    num_results: int = 3
-    time_range: str = "any"
-    answer_mode: bool = False
+    """联网搜索配置（需要 WEB_SEARCH_TOOL 插件）"""
+    enabled: bool = True                   # 是否启用联网搜索功能
+    num_results: int = 3                   # 每次搜索返回的结果数量（1-10）
+    time_range: str = "any"               # 搜索时间范围：any（任意时间）、week（一周内）、month（一月内）
+    answer_mode: bool = False              # 是否启用答案模式（仅 Exa 搜索引擎支持，返回更精简的答案）
 
 @dataclass
 class WaitingConfig:
-    """等待配置"""
-    wait_timeout_seconds: int = 300
-    block_ignore_seconds: int = 1800
-    enable_block_action: bool = True
-    clear_goals_on_timeout: bool = False
+    """等待行为配置"""
+    wait_timeout_seconds: int = 300        # 等待超时时间（秒），超时后 AI 会重新思考下一步行动
+    block_ignore_seconds: int = 1800       # 屏蔽忽略时间（秒，默认30分钟），执行 block_and_ignore 动作后忽略对方消息的时长
+    enable_block_action: bool = True       # 是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能
+    clear_goals_on_timeout: bool = False   # 超时时是否清空对话目标（默认保留目标）
 
 @dataclass
 class SessionConfig:
-    """会话配置"""
-    session_expire_seconds: int = 86400 * 7
-    max_history_entries: int = 100
-    initial_history_limit: int = 30
+    """会话管理配置"""
+    session_expire_seconds: int = 86400 * 7  # 会话过期时间（秒，默认7天）
+    max_history_entries: int = 100           # 最大历史记录条数（超过后自动裁剪）
+    initial_history_limit: int = 30          # 从数据库加载的初始历史消息条数（启动时加载）
 
 @dataclass
 class PromptConfig:
     """提示词配置"""
-    activity_stream_format: str = "narrative"
-    max_activity_entries: int = 30
-    max_entry_length: int = 500
-    inject_system_prompt: bool = False
+    activity_stream_format: str = "narrative"  # 活动流格式：narrative（叙述式）、table（表格式）、both（两者都有）
+    max_activity_entries: int = 30            # 活动记录保留条数（用于上下文）
+    max_entry_length: int = 500               # 每条记录最大字符数（避免上下文过长）
+    inject_system_prompt: bool = False        # 是否注入 MoFox 系统提示词（影响回复生成模型选择）
 
 @dataclass
 class PFCConfig:
-    """PFC 总配置"""
-    enabled: bool = True
-    waiting: WaitingConfig = field(default_factory=WaitingConfig)
-    session: SessionConfig = field(default_factory=SessionConfig)
-    reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)
-    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
-    tool: ToolConfig = field(default_factory=ToolConfig)
-    prompt: PromptConfig = field(default_factory=PromptConfig)
+    """PFC 总配置类
+    
+    整合所有子配置项，提供统一的配置访问接口。
+    注意：所有配置项都有合理的默认值，无需手动配置即可使用。
+    """
+    enabled: bool = True                                              # 是否启用 PFC 私聊聊天器
+    waiting: WaitingConfig = field(default_factory=WaitingConfig)     # 等待行为配置
+    session: SessionConfig = field(default_factory=SessionConfig)     # 会话管理配置
+    reply_checker: ReplyCheckerConfig = field(default_factory=ReplyCheckerConfig)  # 回复检查器配置
+    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)  # 联网搜索配置
+    tool: ToolConfig = field(default_factory=ToolConfig)              # 工具调用配置
+    prompt: PromptConfig = field(default_factory=PromptConfig)        # 提示词配置
 
     @property
     def enabled_stream_types(self) -> list[str]:
+        """返回启用的聊天类型（仅私聊）"""
         return ["private"]
 
 
@@ -191,40 +196,136 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
     }
 
     config_schema: ClassVar[dict[str, dict[str, ConfigField]]] = {
-        "inner": {"version": ConfigField(type=str, default=CONFIG_VERSION, description="配置文件版本号")},
-        "plugin": {"enabled": ConfigField(type=bool, default=True, description="是否启用 PFC 私聊聊天器")},
+        "inner": {
+            "version": ConfigField(
+                type=str,
+                default=CONFIG_VERSION,
+                description="配置文件版本号（用于配置文件升级与兼容性检查）"
+            )
+        },
+        "plugin": {
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用 PFC 私聊聊天器"
+            )
+        },
         "waiting": {
-            "wait_timeout_seconds": ConfigField(type=int, default=300, description="等待超时时间（秒）"),
-            "block_ignore_seconds": ConfigField(type=int, default=1800, description="屏蔽忽略时间（秒）"),
-            "enable_block_action": ConfigField(type=bool, default=True, description="是否启用屏蔽动作"),
+            "wait_timeout_seconds": ConfigField(
+                type=int,
+                default=300,
+                description="等待超时时间（秒），超时后AI会重新思考下一步行动"
+            ),
+            "block_ignore_seconds": ConfigField(
+                type=int,
+                default=1800,
+                description="屏蔽忽略时间（秒，默认30分钟）- 执行 block_and_ignore 动作后忽略对方消息的时长"
+            ),
+            "enable_block_action": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能"
+            ),
         },
         "session": {
-            "session_expire_seconds": ConfigField(type=int, default=604800, description="会话过期时间（秒）"),
-            "max_history_entries": ConfigField(type=int, default=100, description="最大历史记录条数"),
-            "initial_history_limit": ConfigField(type=int, default=30, description="初始历史消息条数"),
+            "session_expire_seconds": ConfigField(
+                type=int,
+                default=604800,
+                description="会话过期时间（秒，默认7天）"
+            ),
+            "max_history_entries": ConfigField(
+                type=int,
+                default=100,
+                description="最大历史记录条数"
+            ),
+            "initial_history_limit": ConfigField(
+                type=int,
+                default=30,
+                description="从数据库加载的初始历史消息条数（启动时加载）"
+            ),
         },
         "reply_checker": {
-            "enabled": ConfigField(type=bool, default=True, description="是否启用回复检查器"),
-            "use_llm_check": ConfigField(type=bool, default=True, description="是否使用 LLM 深度检查"),
-            "similarity_threshold": ConfigField(type=float, default=0.9, description="相似度阈值（0-1）"),
-            "max_retries": ConfigField(type=int, default=3, description="最大重试次数"),
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用回复检查器"
+            ),
+            "use_llm_check": ConfigField(
+                type=bool,
+                default=True,
+                description="是否使用 LLM 进行深度检查（否则只做基本检查）"
+            ),
+            "similarity_threshold": ConfigField(
+                type=float,
+                default=0.9,
+                description="相似度阈值（0-1），超过此值认为回复重复"
+            ),
+            "max_retries": ConfigField(
+                type=int,
+                default=3,
+                description="回复检查失败时的最大重试次数"
+            ),
         },
         "web_search": {
-            "enabled": ConfigField(type=bool, default=True, description="是否启用联网搜索"),
-            "num_results": ConfigField(type=int, default=3, description="搜索结果数量"),
-            "time_range": ConfigField(type=str, default="any", description="搜索时间范围"),
-            "answer_mode": ConfigField(type=bool, default=False, description="是否启用答案模式"),
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用联网搜索功能（需要 WEB_SEARCH_TOOL 插件）"
+            ),
+            "num_results": ConfigField(
+                type=int,
+                default=3,
+                description="每次搜索返回的结果数量"
+            ),
+            "time_range": ConfigField(
+                type=str,
+                default="any",
+                description="搜索时间范围：any（任意时间）、week（一周内）、month（一月内）"
+            ),
+            "answer_mode": ConfigField(
+                type=bool,
+                default=False,
+                description="是否启用答案模式（仅 Exa 搜索引擎支持，返回更精简的答案）"
+            ),
         },
         "tool": {
-            "enabled": ConfigField(type=bool, default=True, description="是否启用工具调用"),
-            "enable_in_planner": ConfigField(type=bool, default=True, description="是否在规划器中显示工具信息"),
-            "enable_in_replyer": ConfigField(type=bool, default=True, description="是否在回复生成器中显示工具信息"),
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用工具调用"
+            ),
+            "enable_in_planner": ConfigField(
+                type=bool,
+                default=True,
+                description="是否在规划器中显示工具信息"
+            ),
+            "enable_in_replyer": ConfigField(
+                type=bool,
+                default=True,
+                description="是否在回复生成器中显示工具信息"
+            ),
         },
         "prompt": {
-            "activity_stream_format": ConfigField(type=str, default="narrative", description="活动流格式"),
-            "max_activity_entries": ConfigField(type=int, default=30, description="活动记录保留条数"),
-            "max_entry_length": ConfigField(type=int, default=500, description="每条记录最大字符数"),
-            "inject_system_prompt": ConfigField(type=bool, default=False, description="是否注入 MoFox 系统提示词"),
+            "activity_stream_format": ConfigField(
+                type=str,
+                default="narrative",
+                description="活动流格式：narrative（叙述式）、table（表格式）、both（两者都有）"
+            ),
+            "max_activity_entries": ConfigField(
+                type=int,
+                default=30,
+                description="活动记录保留条数"
+            ),
+            "max_entry_length": ConfigField(
+                type=int,
+                default=500,
+                description="每条记录最大字符数"
+            ),
+            "inject_system_prompt": ConfigField(
+                type=bool,
+                default=False,
+                description="是否注入 MoFox 系统提示词"
+            ),
         },
     }
 
