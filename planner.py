@@ -56,7 +56,7 @@ _REASON_HINT_FOLLOW_UP = '必须有解释你是如何根据"上一次行动结�
 
 
 def _build_planner_prompt(is_follow_up: bool, enable_block: bool) -> str:
-    intro = "{{persona_text}}。现在你在参与一场QQ私聊，"
+    intro = "{persona_text}。现在你在参与一场QQ私聊，"
     if is_follow_up:
         intro += "刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动"
         actions = f"{_ACTION_FOLLOW_UP}\n{_ACTIONS_BASE}"
@@ -145,7 +145,14 @@ class ActionPlanner:
             if not success or not content:
                 return "wait", "LLM 调用失败"
 
+            # 调试日志：记录 LLM 原始响应
+            logger.debug(f"[PFC][{self.user_name}] LLM 原始响应: {content[:500]}...")
+            
             action_val, reason_val = get_items_from_json(content, "action", "reason", default="wait")
+            
+            # 调试日志：记录解析结果
+            logger.debug(f"[PFC][{self.user_name}] JSON 解析结果: action_val={action_val!r}, reason_val={reason_val!r}")
+            
             action = action_val or "wait"
             reason = reason_val or "LLM未提供原因，默认等待"
 

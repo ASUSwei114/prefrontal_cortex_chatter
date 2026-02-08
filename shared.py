@@ -341,30 +341,40 @@ def extract_json_from_text(text: str) -> Optional[dict]:
         解析后的字典，失败返回 None
     """
     if not text:
+        logger.info("[PFC] extract_json_from_text: 输入为空")
         return None
     text = text.strip()
+    logger.info(f"[PFC] extract_json_from_text: 输入文本长度={len(text)}, 前100字符={text[:100]!r}")
 
     patterns = [
-        (lambda t: t, None),
-        (lambda t: re.findall(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', t), 'strip'),
-        (lambda t: re.findall(r'\{[\s\S]*\}', t), None)
+        (lambda t: t, None, "直接解析"),
+        (lambda t: re.findall(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', t), 'strip', "Markdown代码块"),
+        (lambda t: re.findall(r'\{[\s\S]*\}', t), None, "花括号匹配")
     ]
 
-    for pattern_func, process in patterns:
+    for pattern_func, process, pattern_name in patterns:
         try:
             if process is None and callable(pattern_func):
                 result = pattern_func(text)
                 if isinstance(result, str):
-                    return json.loads(result)
+                    parsed = json.loads(result)
+                    logger.debug(f"[PFC] extract_json_from_text: 使用'{pattern_name}'成功解析")
+                    return parsed
             matches = pattern_func(text)
             if isinstance(matches, list):
-                for match in matches:
+                logger.debug(f"[PFC] extract_json_from_text: '{pattern_name}'找到{len(matches)}个匹配")
+                for i, match in enumerate(matches):
                     try:
-                        return json.loads(match.strip() if process == 'strip' else match)
-                    except json.JSONDecodeError:
+                        parsed = json.loads(match.strip() if process == 'strip' else match)
+                        logger.debug(f"[PFC] extract_json_from_text: 使用'{pattern_name}'第{i+1}个匹配成功解析")
+                        return parsed
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"[PFC] extract_json_from_text: '{pattern_name}'第{i+1}个匹配解析失败: {e}")
                         continue
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.debug(f"[PFC] extract_json_from_text: '{pattern_name}'解析失败: {e}")
             continue
+    logger.warning(f"[PFC] extract_json_from_text: 所有模式都无法解析JSON, 文本={text[:200]!r}")
     return None
 
 
