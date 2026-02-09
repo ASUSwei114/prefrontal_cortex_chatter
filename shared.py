@@ -341,10 +341,10 @@ def extract_json_from_text(text: str) -> Optional[dict]:
         解析后的字典，失败返回 None
     """
     if not text:
-        logger.info("[PFC] extract_json_from_text: 输入为空")
+        logger.debug("[PFC] extract_json_from_text: 输入为空")
         return None
     text = text.strip()
-    logger.info(f"[PFC] extract_json_from_text: 输入文本长度={len(text)}, 前100字符={text[:100]!r}")
+    logger.debug(f"[PFC] extract_json_from_text: 输入文本长度={len(text)}, 前100字符={text[:100]!r}")
 
     patterns = [
         (lambda t: t, None, "直接解析"),
