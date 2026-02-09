@@ -72,7 +72,11 @@ class PrefrontalCortexChatter(BaseChatter):
                 await self._build_chat_history_str(session, user_name)
                 from .conversation_loop import get_loop_manager
                 session.should_continue = True
-                await get_loop_manager().get_or_create_loop(session, user_name)
+                loop = await get_loop_manager().get_or_create_loop(session, user_name)
+                
+                # 通知循环有新消息到达，触发中断
+                if loop and loop._running:
+                    loop.notify_new_message()
 
                 for msg in unread_messages:
                     context.mark_message_as_read(str(msg.message_id))

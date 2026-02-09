@@ -108,6 +108,8 @@ class ConversationLoop:
         self.config = get_config()
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._interrupt_event = asyncio.Event()  # 新消息中断事件
+        self._planning_task: Optional[asyncio.Task] = None  # 当前规划任务
 
     async def start(self):
         if self._running:
@@ -118,6 +120,9 @@ class ConversationLoop:
 
     async def stop(self):
         self._running = False
+        self._interrupt_event.set()  # 触发中断事件
+        if self._planning_task and not self._planning_task.done():
+            self._planning_task.cancel()
         if self._task:
             self._task.cancel()
             try:
@@ -126,6 +131,11 @@ class ConversationLoop:
                 pass
             self._task = None
         logger.info(f"[PFC][{self.user_name}] 会话循环已停止")
+
+    def notify_new_message(self):
+        """通知循环有新消息到达，触发中断"""
+        self._interrupt_event.set()
+        logger.debug(f"[PFC][{self.user_name}] 收到新消息通知，触发中断事件")
 
     async def _loop(self):
         """PFC核心循环"""
@@ -142,15 +152,59 @@ class ConversationLoop:
                 continue
 
             try:
+                # 清除中断事件，准备新一轮规划
+                self._interrupt_event.clear()
                 initial_new_message_count = self.session.observation_info.new_messages_count + 1
 
                 from .planner import ActionPlanner
                 planner = ActionPlanner(self.session, self.user_name)
-                action, reason = await planner.plan()
+                
+                # 使用可中断的方式执行规划
+                self._planning_task = asyncio.create_task(planner.plan())
+                try:
+                    # 等待规划完成或被中断
+                    done, pending = await asyncio.wait(
+                        [self._planning_task, asyncio.create_task(self._interrupt_event.wait())],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    # 检查是否被中断
+                    if self._interrupt_event.is_set():
+                        # 取消规划任务
+                        if not self._planning_task.done():
+                            self._planning_task.cancel()
+                            try:
+                                await self._planning_task
+                            except asyncio.CancelledError:
+                                pass
+                        logger.info(f"[PFC][{self.user_name}] 规划被新消息中断，重新规划")
+                        self.session.conversation_info.last_successful_reply_action = None
+                        # 取消等待任务
+                        for task in pending:
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
+                        await asyncio.sleep(0.1)
+                        continue
+                    
+                    # 获取规划结果
+                    action, reason = self._planning_task.result()
+                    # 取消等待任务
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                finally:
+                    self._planning_task = None
 
                 current_new_message_count = self.session.observation_info.new_messages_count
-                if current_new_message_count > initial_new_message_count + 2:
-                    logger.info(f"[PFC][{self.user_name}] 规划期间发现新增消息，重新规划")
+                # 降低阈值：只要有新消息就重新规划
+                if current_new_message_count > initial_new_message_count:
+                    logger.info(f"[PFC][{self.user_name}] 规划期间发现新增消息 ({initial_new_message_count} -> {current_new_message_count})，重新规划")
                     self.session.conversation_info.last_successful_reply_action = None
                     await asyncio.sleep(0.1)
                     continue
@@ -218,7 +272,7 @@ class ConversationLoop:
                 self.session.conversation_info.last_successful_reply_action = None
 
     async def _handle_reply_action(self, action_type: str, action_index: int) -> bool:
-        """处理回复类行动"""
+        """处理回复类行动（支持中断）"""
         from .replyer import ReplyGenerator, ReplyChecker
 
         max_attempts = self.config.reply_checker.max_retries
@@ -228,9 +282,57 @@ class ConversationLoop:
         checker = ReplyChecker(self.session.stream_id, self.user_name, self.config)
 
         while attempt < max_attempts and not is_suitable:
+            # 检查是否被中断
+            if self._interrupt_event.is_set():
+                logger.info(f"[PFC][{self.user_name}] 回复生成被新消息中断")
+                self.session.conversation_info.done_action[action_index].update({
+                    "status": "recall", "final_reason": "被新消息中断"})
+                return False
+            
             attempt += 1
             self.session.state = ConversationState.GENERATING
-            reply_content = await replyer.generate(action_type=action_type)
+            
+            # 使用可中断的方式生成回复
+            generate_task = asyncio.create_task(replyer.generate(action_type=action_type))
+            interrupt_task = asyncio.create_task(self._interrupt_event.wait())
+            
+            try:
+                done, pending = await asyncio.wait(
+                    [generate_task, interrupt_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                # 检查是否被中断
+                if self._interrupt_event.is_set():
+                    if not generate_task.done():
+                        generate_task.cancel()
+                        try:
+                            await generate_task
+                        except asyncio.CancelledError:
+                            pass
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    logger.info(f"[PFC][{self.user_name}] 回复生成被新消息中断")
+                    self.session.conversation_info.done_action[action_index].update({
+                        "status": "recall", "final_reason": "被新消息中断"})
+                    return False
+                
+                reply_content = generate_task.result()
+                # 取消等待任务
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            except Exception as e:
+                logger.error(f"[PFC][{self.user_name}] 生成回复时出错: {e}")
+                check_reason = f"第 {attempt} 次生成出错: {e}"
+                continue
 
             if not reply_content:
                 check_reason = f"第 {attempt} 次生成回复为空"
@@ -255,7 +357,8 @@ class ConversationLoop:
                 break
 
         if is_suitable:
-            if self._check_new_messages_after_planning():
+            # 发送前再次检查是否有新消息
+            if self._interrupt_event.is_set() or self._check_new_messages_after_planning():
                 self.session.conversation_info.done_action[action_index].update({
                     "status": "recall", "final_reason": f"有新消息，取消发送"})
                 return False
