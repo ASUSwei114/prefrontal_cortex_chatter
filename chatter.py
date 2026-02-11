@@ -62,10 +62,13 @@ class PrefrontalCortexChatter(BaseChatter):
                     await self.session_manager.save_session(user_id)
 
                 for msg in unread_messages:
+                    # 获取消息的用户名，优先使用消息中的昵称，否则使用默认用户名
+                    msg_user_name = (msg.user_info.user_nickname if msg.user_info and msg.user_info.user_nickname else user_name)
+                    msg_user_id = str(msg.user_info.user_id) if msg.user_info else user_id
                     session.add_user_message(
                         content=msg.processed_plain_text or msg.display_message or "",
-                        user_name=msg.user_info.user_nickname if msg.user_info else user_name,
-                        user_id=str(msg.user_info.user_id) if msg.user_info else user_id,
+                        user_name=msg_user_name,
+                        user_id=msg_user_id,
                         timestamp=msg.time,
                     )
 

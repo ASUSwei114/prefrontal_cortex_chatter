@@ -40,16 +40,17 @@ class Waiter:
     async def wait(self, conversation_info: ConversationInfo) -> bool:
         """等待用户新消息或超时，返回True表示超时"""
         wait_start_time = time.time()
-        logger.info(f"[私聊][{self.private_name}]进入常规等待状态 (超时: {self.timeout_seconds} 秒)...")
+        logger.info(f"[私聊][{self.private_name}]进入常规等待状态 (超时: {self.timeout_seconds} 秒, 检查间隔: {self.check_interval} 秒)...")
 
         while True:
             if await self._check_new_message(wait_start_time):
-                logger.info(f"[私聊][{self.private_name}]等待结束，收到新消息")
+                elapsed_time = time.time() - wait_start_time
+                logger.info(f"[私聊][{self.private_name}]等待结束，收到新消息 (已等待 {elapsed_time:.1f} 秒)")
                 return False
 
             elapsed_time = time.time() - wait_start_time
             if elapsed_time > self.timeout_seconds:
-                logger.info(f"[私聊][{self.private_name}]等待超过 {self.timeout_seconds} 秒...添加思考目标。")
+                logger.info(f"[私聊][{self.private_name}]等待超时 (已等待 {elapsed_time:.1f} 秒，超时阈值 {self.timeout_seconds} 秒)...添加思考目标。")
                 conversation_info.goal_list.append({
                     "goal": f"你等待了{elapsed_time / 60:.1f}分钟，注意可能在对方看来聊天已经结束，思考接下来要做什么",
                     "reasoning": "对方很久没有回复你的消息了",
@@ -61,16 +62,17 @@ class Waiter:
     async def wait_listening(self, conversation_info: ConversationInfo) -> bool:
         """倾听用户发言或超时，返回True表示超时"""
         wait_start_time = time.time()
-        logger.info(f"[私聊][{self.private_name}]进入倾听等待状态 (超时: {self.timeout_seconds} 秒)...")
+        logger.info(f"[私聊][{self.private_name}]进入倾听等待状态 (超时: {self.timeout_seconds} 秒, 检查间隔: {self.check_interval} 秒)...")
 
         while True:
             if await self._check_new_message(wait_start_time):
-                logger.info(f"[私聊][{self.private_name}]倾听等待结束，收到新消息")
+                elapsed_time = time.time() - wait_start_time
+                logger.info(f"[私聊][{self.private_name}]倾听等待结束，收到新消息 (已等待 {elapsed_time:.1f} 秒)")
                 return False
 
             elapsed_time = time.time() - wait_start_time
             if elapsed_time > self.timeout_seconds:
-                logger.info(f"[私聊][{self.private_name}]倾听等待超过 {self.timeout_seconds} 秒...添加思考目标。")
+                logger.info(f"[私聊][{self.private_name}]倾听等待超时 (已等待 {elapsed_time:.1f} 秒，超时阈值 {self.timeout_seconds} 秒)...添加思考目标。")
                 conversation_info.goal_list.append({
                     "goal": f"你等待了{elapsed_time / 60:.1f}分钟，对方似乎话说一半突然消失了，思考接下来要做什么",
                     "reasoning": "对方话说一半消失了，很久没有回复",
@@ -446,6 +448,9 @@ class ConversationLoop:
         initial_count = self.session.observation_info.new_messages_count
 
         async def check_new_message(since_time: float) -> bool:
+            # 检查是否有新消息或被中断
+            if self._interrupt_event.is_set():
+                return True
             return self.session.observation_info.new_messages_count > initial_count
 
         waiter = Waiter(self.session.stream_id, self.user_name, self.config, new_message_checker=check_new_message)
@@ -460,6 +465,9 @@ class ConversationLoop:
         initial_count = self.session.observation_info.new_messages_count
 
         async def check_new_message(since_time: float) -> bool:
+            # 检查是否有新消息或被中断
+            if self._interrupt_event.is_set():
+                return True
             return self.session.observation_info.new_messages_count > initial_count
 
         waiter = Waiter(self.session.stream_id, self.user_name, self.config, new_message_checker=check_new_message)
@@ -610,6 +618,9 @@ class ConversationLoopManager:
             if user_id in self._loops:
                 loop = self._loops[user_id]
                 if loop._running:
+                    # 更新 user_name（可能从临时会话变为有昵称的会话）
+                    if user_name and user_name != user_id:
+                        loop.user_name = user_name
                     return loop
                 del self._loops[user_id]
 
