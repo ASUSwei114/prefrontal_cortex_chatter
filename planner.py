@@ -35,39 +35,33 @@ _PROMPT_CONTEXT = """【当前时间】
 _PROMPT_JSON_OUTPUT = """请以JSON格式输出你的决策：
 {{{{
     "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因 ({reason_hint})"
+    "reason": "选择该行动的原因 (简要说明，30字以内)"
 }}}}
 
 注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
 
-_ACTIONS_BASE = """fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择
-listening: 倾听对方发言，当你认为对方话才说到一半时选择
-rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标或当前目标不再适用时选择
+_ACTIONS_BASE = """fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
+listening: 倾听对方发言，当你认为对方话才说到一半，发言明显未结束时选择
+rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择。注意私聊的环境是灵活的，有可能需要经常选择
 use_tool: 使用工具获取信息，当你需要搜索、查询或执行特定操作时选择（需要在reason中说明要使用的工具名称）
-end_conversation: 结束对话，对方长时间没回复或对话告一段落时选择"""
+end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择"""
 
-_ACTION_BLOCK = """block_and_ignore: 直接结束对话并在一段时间内无视对方所有发言，当遭到骚扰时选择"""
+_ACTION_BLOCK = """block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择"""
 _ACTION_DIRECT_REPLY = """direct_reply: 直接回复对方"""
-_ACTION_FOLLOW_UP = """wait: 暂时不说话，等待对方回复
-send_new_message: 发送一条新消息继续对话，允许追问、补充、深入话题"""
-
-_REASON_HINT_INITIAL = '必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的'
-_REASON_HINT_FOLLOW_UP = '必须有解释你是如何根据"上一次行动结果"、"对话记录"和自身设定人设做出合理判断的。请说明你为什么选择继续发言而不是等待'
-
+_ACTION_FOLLOW_UP = """wait: 暂时不说话，留给对方交互空间，等待对方回复（尤其是在你刚发言后、或上次发言因重复、发言过多被拒时、或不确定做什么时，这是不错的选择）
+send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。**但是避免在因重复被拒后立即使用，也不要在对方没有回复的情况下过多的"消息轰炸"或重复发言**"""
 
 def _build_planner_prompt(is_follow_up: bool, enable_block: bool) -> str:
     intro = "{persona_text}。现在你在参与一场QQ私聊，"
     if is_follow_up:
         intro += "刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动"
         actions = f"{_ACTION_FOLLOW_UP}\n{_ACTIONS_BASE}"
-        reason_hint = _REASON_HINT_FOLLOW_UP
     else:
         intro += "请根据以下【所有信息】审慎且灵活的决策下一步行动"
         actions = f"{_ACTION_DIRECT_REPLY}\n{_ACTIONS_BASE}"
-        reason_hint = _REASON_HINT_INITIAL
     if enable_block:
         actions += f"\n{_ACTION_BLOCK}"
-    return f"{intro}：\n\n{_PROMPT_CONTEXT}\n可选行动类型以及解释：\n{actions}\n\n{_PROMPT_JSON_OUTPUT.format(reason_hint=reason_hint)}"
+    return f"{intro}：\n\n{_PROMPT_CONTEXT}\n可选行动类型以及解释：\n{actions}\n\n{_PROMPT_JSON_OUTPUT}"
 
 
 PROMPT_INITIAL_REPLY_WITH_BLOCK = _build_planner_prompt(False, True)
@@ -219,7 +213,11 @@ class ActionPlanner:
                 if isinstance(last_goal, dict):
                     goal_text = last_goal.get("goal", "")
                     if isinstance(goal_text, str) and "分钟，思考接下来要做什么" in goal_text:
-                        return "重要提示：对方已经长时间没有回复你的消息了，请基于此情况规划下一步。\n"
+                        try:
+                            timeout_minutes_text = goal_text.split("，")[0].replace("你等待了", "")
+                            return f"重要提示：对方已经长时间（{timeout_minutes_text}）没有回复你的消息了（这可能代表对方繁忙/不想回复/没注意到你的消息等情况，或在对方看来本次聊天已告一段落），请基于此情况规划下一步。\n"
+                        except Exception:
+                            return "重要提示：对方已经长时间没有回复你的消息了（这可能代表对方繁忙/不想回复/没注意到你的消息等情况，或在对方看来本次聊天已告一段落），请基于此情况规划下一步。\n"
         except Exception:
             pass
         return ""

@@ -133,7 +133,13 @@ class ObservationInfo:
                    last_message_sender=data.get("last_message_sender"),
                    last_message_content=data.get("last_message_content", ""))
 
-    async def clear_unprocessed_messages(self, bot_name: str = "Bot") -> None:
+    async def clear_unprocessed_messages(self, bot_name: str = "Bot", truncate: bool = True) -> None:
+        """将未处理消息移入历史记录，并更新聊天记录字符串
+        
+        Args:
+            bot_name: Bot 名称
+            truncate: 是否根据消息新旧程度截断过长内容
+        """
         if not self.unprocessed_messages:
             return
         from src.config.config import global_config
@@ -144,7 +150,9 @@ class ObservationInfo:
             self.chat_history = self.chat_history[-100:]
 
         actual_bot_name = global_config.bot.nickname if global_config else bot_name
-        self.chat_history_str = format_chat_history(self.chat_history[-20:], actual_bot_name, "用户", 20)
+        self.chat_history_str = format_chat_history(
+            self.chat_history[-20:], actual_bot_name, "用户", 20, truncate=truncate
+        )
         self.unprocessed_messages = []
         self.new_messages_count = 0
         self.chat_history_count = len(self.chat_history)

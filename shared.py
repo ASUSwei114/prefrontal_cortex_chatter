@@ -180,8 +180,45 @@ def build_knowledge_string(knowledge_list: list[dict[str, Any]] | None) -> str:
     return result
 
 
+def _truncate_message_content(content: str, index: int, total: int) -> str:
+    """根据消息在列表中的位置智能截断内容
+    
+    模拟人类记忆特点：越久远的消息记得越模糊，越近期的消息记得越清楚
+    
+    Args:
+        content: 消息内容
+        index: 消息在列表中的索引
+        total: 消息总数
+        
+    Returns:
+        截断后的内容
+    """
+    if total <= 0 or not content:
+        return content
+    
+    percentile = index / total
+    original_len = len(content)
+    
+    # 根据位置百分比确定截断限制
+    if percentile < 0.2:  # 最旧的 20%
+        limit, suffix = 50, "......（记不清了）"
+    elif percentile < 0.5:  # 20% - 50%
+        limit, suffix = 100, "......（有点记不清了）"
+    elif percentile < 0.7:  # 50% - 70%
+        limit, suffix = 200, "......（内容太长了）"
+    elif percentile < 1.0:  # 70% - 100%
+        limit, suffix = 400, "......（太长了）"
+    else:
+        return content
+    
+    if limit > 0 and original_len > limit:
+        return f"{content[:limit]}{suffix}"
+    return content
+
+
 def format_chat_history(chat_history: list[dict[str, Any]], bot_name: str = "Bot",
-                        user_name: str = "用户", max_messages: int = 30) -> str:
+                        user_name: str = "用户", max_messages: int = 30,
+                        truncate: bool = False) -> str:
     """格式化聊天历史为可读文本
     
     Args:
@@ -189,6 +226,7 @@ def format_chat_history(chat_history: list[dict[str, Any]], bot_name: str = "Bot
         bot_name: Bot 名称
         user_name: 用户名称
         max_messages: 最多保留的消息条数
+        truncate: 是否根据消息新旧程度截断过长内容
     
     Returns:
         格式化的聊天历史文本
@@ -196,7 +234,10 @@ def format_chat_history(chat_history: list[dict[str, Any]], bot_name: str = "Bot
     if not chat_history:
         return "还没有聊天记录。"
 
-    def format_message(msg: dict) -> list[str]:
+    messages_slice = chat_history[-max_messages:]
+    total_messages = len(messages_slice)
+
+    def format_message(msg: dict, index: int) -> list[str]:
         msg_type = msg.get("type", "")
         content = msg.get("content", "").strip()
         readable_time = translate_timestamp(msg.get("time", time.time()))
@@ -206,13 +247,22 @@ def format_chat_history(chat_history: list[dict[str, Any]], bot_name: str = "Bot
             header = f"{readable_time} {bot_name}(你) 说:"
         else:
             return []
+        
+        # 应用截断逻辑
+        if truncate and content:
+            content = _truncate_message_content(content, index, total_messages)
+        
         result = [header]
         if content:
-            result.append(f"{content[:-1] if content.endswith('。') else content};")
+            # 如果内容已被截断（以特定后缀结尾），不再添加分号
+            if content.endswith("）"):
+                result.append(content)
+            else:
+                result.append(f"{content[:-1] if content.endswith('。') else content};")
         result.append("")
         return result
 
-    formatted = [line for msg in chat_history[-max_messages:] for line in format_message(msg)]
+    formatted = [line for i, msg in enumerate(messages_slice) for line in format_message(msg, i)]
     return "\n".join(formatted).strip() or "还没有聊天记录。"
 
 
