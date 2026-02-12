@@ -69,6 +69,7 @@ class WaitingConfig:
     block_ignore_seconds: int = 1800       # 屏蔽忽略时间（秒，默认30分钟），执行 block_and_ignore 动作后忽略对方消息的时长
     enable_block_action: bool = True       # 是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能
     clear_goals_on_timeout: bool = False   # 超时时是否清空对话目标（默认保留目标）
+    max_consecutive_messages: int = 2      # 最大连续发言数，超过后强制等待对方回复（防止消息轰炸）
 
 @dataclass
 class SessionConfig:
@@ -225,6 +226,11 @@ class PrefrontalCortexChatterPlugin(BasePlugin):
                 type=bool,
                 default=True,
                 description="是否启用 block_and_ignore 动作（屏蔽对方）。设为 false 可禁用此功能"
+            ),
+            "max_consecutive_messages": ConfigField(
+                type=int,
+                default=2,
+                description="最大连续发言数，超过后强制等待对方回复（防止消息轰炸）"
             ),
         },
         "session": {

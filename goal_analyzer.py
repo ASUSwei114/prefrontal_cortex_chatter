@@ -106,26 +106,11 @@ PROMPT_ANALYZE_CONVERSATION = """{persona_text}。现在你在参与一场QQ聊�
 
 
 def _calculate_similarity(goal1: str, goal2: str) -> float:
-    """
-    简单计算两个目标之间的相似度
-    
-    使用字符重叠率作为简单的相似度度量
-    
-    Args:
-        goal1: 第一个目标
-        goal2: 第二个目标
-        
-    Returns:
-        相似度得分 (0-1)
-    """
+    """计算两个目标之间的相似度（使用 SequenceMatcher，对中文更准确）"""
     if not goal1 or not goal2:
         return 0.0
-    
-    words1 = set(goal1)
-    words2 = set(goal2)
-    overlap = len(words1.intersection(words2))
-    total = len(words1.union(words2))
-    return overlap / total if total > 0 else 0
+    import difflib
+    return difflib.SequenceMatcher(None, goal1, goal2).ratio()
 
 
 class GoalAnalyzer:
@@ -352,10 +337,10 @@ class GoalAnalyzer:
         result = extract_json_array_from_text(content)
         
         if result and isinstance(result, list):
-            # 清空现有目标列表并添加新目标
+            # 清空现有目标列表并添加新目标（限制最多 max_goals 个）
             conversation_info.goal_list = []
             
-            for item in result:
+            for item in result[:self.max_goals]:
                 if isinstance(item, dict):
                     goal = item.get("goal", "")
                     reasoning = item.get("reasoning", "")

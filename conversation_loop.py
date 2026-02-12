@@ -112,6 +112,9 @@ class ConversationLoop:
         self._running = False
         self._interrupt_event = asyncio.Event()  # 新消息中断事件
         self._planning_task: Optional[asyncio.Task] = None  # 当前规划任务
+        self._consecutive_bot_messages: int = 0  # 连续发言计数器
+        self._max_consecutive_messages: int = getattr(
+            self.config.waiting, 'max_consecutive_messages', 2)  # 从配置读取，默认2
 
     async def start(self):
         if self._running:
@@ -137,6 +140,7 @@ class ConversationLoop:
     def notify_new_message(self):
         """通知循环有新消息到达，触发中断"""
         self._interrupt_event.set()
+        self._consecutive_bot_messages = 0  # 收到新消息时重置连续发言计数
         logger.debug(f"[PFC][{self.user_name}] 收到新消息通知，触发中断事件")
 
     async def _loop(self):
@@ -163,16 +167,16 @@ class ConversationLoop:
                 
                 # 使用可中断的方式执行规划
                 self._planning_task = asyncio.create_task(planner.plan())
+                interrupt_task = asyncio.create_task(self._interrupt_event.wait())
                 try:
                     # 等待规划完成或被中断
                     done, pending = await asyncio.wait(
-                        [self._planning_task, asyncio.create_task(self._interrupt_event.wait())],
+                        [self._planning_task, interrupt_task],
                         return_when=asyncio.FIRST_COMPLETED
                     )
                     
                     # 检查是否被中断
                     if self._interrupt_event.is_set():
-                        # 取消规划任务
                         if not self._planning_task.done():
                             self._planning_task.cancel()
                             try:
@@ -181,26 +185,20 @@ class ConversationLoop:
                                 pass
                         logger.info(f"[PFC][{self.user_name}] 规划被新消息中断，重新规划")
                         self.session.conversation_info.last_successful_reply_action = None
-                        # 取消等待任务
-                        for task in pending:
-                            task.cancel()
-                            try:
-                                await task
-                            except asyncio.CancelledError:
-                                pass
                         await asyncio.sleep(0.1)
                         continue
                     
                     # 获取规划结果
                     action, reason = self._planning_task.result()
-                    # 取消等待任务
-                    for task in pending:
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
                 finally:
+                    # 确保所有 task 都被清理，防止泄漏
+                    for task in [self._planning_task, interrupt_task]:
+                        if task and not task.done():
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
                     self._planning_task = None
 
                 current_new_message_count = self.session.observation_info.new_messages_count
@@ -214,6 +212,12 @@ class ConversationLoop:
                 if initial_new_message_count > 0 and action in ["direct_reply", "send_new_message"]:
                     await self.session.clear_unprocessed_messages()
                     self.session.observation_info.new_messages_count = 0
+
+                # 连续发言保护：超过限制时强制改为 wait
+                if action in ["send_new_message"] and self._consecutive_bot_messages >= self._max_consecutive_messages:
+                    logger.info(f"[PFC][{self.user_name}] 连续发言已达 {self._consecutive_bot_messages} 次，强制等待")
+                    action = "wait"
+                    reason = f"连续发言已达上限({self._max_consecutive_messages}次)，等待对方回复"
 
                 await self._handle_action(action, reason)
 
@@ -270,8 +274,14 @@ class ConversationLoop:
             self.session.conversation_info.done_action[action_index].update({
                 "status": "done", "time": datetime.datetime.now().strftime("%H:%M:%S"),
             })
-            if action not in ["direct_reply", "send_new_message"]:
+            if action in ["direct_reply", "send_new_message"]:
+                self._consecutive_bot_messages += 1
+            else:
                 self.session.conversation_info.last_successful_reply_action = None
+
+        # 裁剪 done_action 避免无限增长
+        if len(self.session.conversation_info.done_action) > 20:
+            self.session.conversation_info.done_action = self.session.conversation_info.done_action[-20:]
 
     async def _handle_reply_action(self, action_type: str, action_index: int) -> bool:
         """处理回复类行动（支持中断）"""
@@ -401,9 +411,23 @@ class ConversationLoop:
         except Exception as e:
             logger.error(f"[PFC][{self.user_name}] 发送回复失败: {e}")
 
-    async def _handle_fetch_knowledge(self, query: str, action_index: int) -> bool:
+    def _extract_knowledge_query(self, reason: str) -> str:
+        """从 reason 中提取知识查询关键词"""
+        import re
+        # 匹配 "查询：xxx" 或 "查询:xxx" 格式
+        match = re.search(r'查询[：:]\s*(.+?)(?:[，。,.]|$)', reason)
+        if match:
+            return match.group(1).strip()
+        # fallback: 使用最近一条用户消息作为 query
+        for msg in reversed(self.session.observation_info.chat_history):
+            if msg.get("type") == "user_message":
+                return msg.get("content", "")[:200]
+        return reason[:200]
+
+    async def _handle_fetch_knowledge(self, reason: str, action_index: int) -> bool:
         """处理获取知识"""
         self.session.state = ConversationState.FETCHING
+        query = self._extract_knowledge_query(reason)
         try:
             from .knowledge_fetcher import KnowledgeFetcher
             fetcher = KnowledgeFetcher(self.user_name, self.config)

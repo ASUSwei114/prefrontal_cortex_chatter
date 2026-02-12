@@ -35,21 +35,22 @@ _PROMPT_CONTEXT = """【当前时间】
 _PROMPT_JSON_OUTPUT = """请以JSON格式输出你的决策：
 {{{{
     "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的原因 (简要说明，30字以内)"
+    "reason": "选择该行动的详细原因 (必须解释你是如何根据上一次行动结果、对话记录和自身人设做出判断的。如果你已经连续发言，必须记录已经发言了几次，并说明为什么选择继续发言而不是等待)"
 }}}}
 
 注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
 
-_ACTIONS_BASE = """fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择
+_ACTIONS_BASE = """fetch_knowledge: 需要调取知识或记忆，当需要专业知识或特定信息时选择，对方若提到你不太认识的人名或实体也可以尝试选择。**选择此项时，reason中必须包含"查询：xxx"格式写明要查询的关键词**
 listening: 倾听对方发言，当你认为对方话才说到一半，发言明显未结束时选择
 rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择。注意私聊的环境是灵活的，有可能需要经常选择
 use_tool: 使用工具获取信息，当你需要搜索、查询或执行特定操作时选择（需要在reason中说明要使用的工具名称）
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择"""
+say_goodbye: 发送一条简短的告别消息后结束对话，当你觉得对话告一段落、需要礼貌收尾时选择
+end_conversation: 直接静默结束对话，不再发送任何消息。当对方长时间没回复、或对话已经自然结束不需要再说什么时选择"""
 
 _ACTION_BLOCK = """block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择"""
 _ACTION_DIRECT_REPLY = """direct_reply: 直接回复对方"""
-_ACTION_FOLLOW_UP = """wait: 暂时不说话，留给对方交互空间，等待对方回复（尤其是在你刚发言后、或上次发言因重复、发言过多被拒时、或不确定做什么时，这是不错的选择）
-send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。**但是避免在因重复被拒后立即使用，也不要在对方没有回复的情况下过多的"消息轰炸"或重复发言**"""
+_ACTION_FOLLOW_UP = """wait: 暂时不说话，留给对方交互空间，等待对方回复（尤其是在你刚发言后、或上次发言因重复、发言过多被拒时、或不确定做什么时，这是不错的选择。**大多数情况下，发完消息后应该选择 wait**）
+send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题。**严格限制：如果对方还没有回复你上一条消息，不要选择此项！避免连续发送多条消息造成"消息轰炸"。只有在你确实有重要补充且对方不会觉得被打扰时才选择**"""
 
 def _build_planner_prompt(is_follow_up: bool, enable_block: bool) -> str:
     intro = "{persona_text}。现在你在参与一场QQ私聊，"
@@ -68,20 +69,6 @@ PROMPT_INITIAL_REPLY_WITH_BLOCK = _build_planner_prompt(False, True)
 PROMPT_INITIAL_REPLY_NO_BLOCK = _build_planner_prompt(False, False)
 PROMPT_FOLLOW_UP_WITH_BLOCK = _build_planner_prompt(True, True)
 PROMPT_FOLLOW_UP_NO_BLOCK = _build_planner_prompt(True, False)
-
-PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ 私聊。
-
-【你们之前的聊天记录】
-{chat_history_text}
-
-你觉得你们的对话已经完整结束了吗？如果觉得确实有必要再发一条简短的告别消息，就输出 "yes"。否则输出 "no"。
-
-请以 JSON 格式输出你的选择：
-{{
-    "say_bye": "yes/no",
-    "reason": "选择 yes 或 no 的原因 (简要说明)"
-}}"""
-
 
 class ActionPlanner:
     """行动规划器"""
@@ -113,6 +100,7 @@ class ActionPlanner:
         else:
             prompt_template = PROMPT_INITIAL_REPLY_WITH_BLOCK if enable_block else PROMPT_INITIAL_REPLY_NO_BLOCK
 
+        # 无知识/无工具时传空字符串，减少 prompt 信息过载
         prompt = prompt_template.format(
             persona_text=personality_info,
             goals_str=goals_str or "- 目前没有明确对话目标，请考虑设定一个。",
@@ -122,8 +110,8 @@ class ActionPlanner:
             time_since_last_bot_message_info=time_since_last_bot_message_info,
             timeout_context=timeout_context,
             chat_history_text=chat_history_text or "还没有聊天记录。",
-            knowledge_info_str=knowledge_info_str,
-            tool_info_str=tool_info_str or "- 暂无工具信息",
+            knowledge_info_str=knowledge_info_str if self.session.conversation_info.knowledge_list else "",
+            tool_info_str=tool_info_str or "",
             current_time_str=get_current_time_str(),
         )
 
@@ -150,9 +138,6 @@ class ActionPlanner:
             action = action_val or "wait"
             reason = reason_val or "LLM未提供原因，默认等待"
 
-            if action == "end_conversation":
-                return await self._handle_end_decision(personality_info, chat_history_text, reason)
-
             valid_actions = ["direct_reply", "send_new_message", "fetch_knowledge", "wait",
                            "listening", "rethink_goal", "use_tool", "end_conversation", "say_goodbye"]
             if self._config.waiting.enable_block_action:
@@ -168,30 +153,8 @@ class ActionPlanner:
             logger.error(f"[PFC][{self.user_name}] 规划行动时出错: {e}")
             return "wait", f"行动规划处理中发生错误: {e}"
 
-    async def _handle_end_decision(self, persona_text: str, chat_history_text: str, initial_reason: str) -> Tuple[str, str]:
-        """处理结束对话决策"""
-        try:
-            models = llm_api.get_available_models()
-            planner_config = models.get("planner") or models.get("normal")
-            if not planner_config:
-                return "end_conversation", initial_reason
-
-            prompt = PROMPT_END_DECISION.format(persona_text=persona_text, chat_history_text=chat_history_text)
-            success, content, _, _ = await llm_api.generate_with_model(
-                prompt=prompt, model_config=planner_config, request_type="pfc.end_decision")
-
-            if not success or not content:
-                return "end_conversation", initial_reason
-
-            say_bye_val, end_reason_val = get_items_from_json(content, "say_bye", "reason", default="no")
-            if (say_bye_val or "no").lower() == "yes":
-                return "say_goodbye", f"决定发送告别语。原因: {end_reason_val} (原结束理由: {initial_reason})"
-            return "end_conversation", initial_reason
-        except Exception as e:
-            logger.error(f"[PFC][{self.user_name}] 结束决策出错: {e}")
-            return "end_conversation", initial_reason
-
     def _get_time_since_last_bot_message(self) -> str:
+        result = ""
         try:
             for msg in reversed(self.session.observation_info.chat_history):
                 if msg.get("type") == "bot_message":
@@ -199,11 +162,20 @@ class ActionPlanner:
                     if msg_time:
                         time_diff = time.time() - msg_time
                         if time_diff < 60.0:
-                            return f"提示：你上一条成功发送的消息是在 {time_diff:.1f} 秒前。\n"
+                            result += f"提示：你上一条成功发送的消息是在 {time_diff:.1f} 秒前。\n"
                         break
         except Exception:
             pass
-        return ""
+        # 统计连续发言数（从最近的消息往前数，直到遇到用户消息）
+        consecutive = 0
+        for msg in reversed(self.session.observation_info.chat_history):
+            if msg.get("type") == "bot_message":
+                consecutive += 1
+            else:
+                break
+        if consecutive >= 2:
+            result += f"⚠️ 重要提示：你已经连续发送了 {consecutive} 条消息，对方还没有回复。请优先选择 wait 等待对方回复，避免消息轰炸。\n"
+        return result
 
     def _get_timeout_context(self) -> str:
         try:
